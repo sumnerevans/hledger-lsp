@@ -297,7 +297,7 @@ func renderInlineAmount(p analyzer.PostingTemplate) string {
 }
 
 // amountSpacesFromAlignment returns the gap between an account ending at
-// accountEnd (a rune column) and the rendered amount such that the amount lands
+// accountEnd (a display column) and the rendered amount such that the amount lands
 // on the same column the formatter would produce for this document. Falls back
 // to 2 spaces when alignment is disabled or no usable column was computed.
 func amountSpacesFromAlignment(accountEnd int, amountText string, alignment formatter.AlignmentInfo, formatting formattingSettings) int {

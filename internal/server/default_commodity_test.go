@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,7 +110,7 @@ func TestInlayHint_BareAmountsReportDefaultCommodity(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, hints, 1)
-	assert.Equal(t, protocol.String("-50,00 RUB"), hints[0].Label)
+	assert.Equal(t, protocol.String("   -50,00 RUB"), hints[0].Label)
 }
 
 // A bare amount is not a written occurrence of the commodity for references:
@@ -210,7 +211,8 @@ func TestInlayHint_SymbolLessDefaultCommodityKeepsTheOneInForce(t *testing.T) {
 			})
 			require.NoError(t, err)
 			require.Len(t, hints, 1)
-			assert.Equal(t, protocol.String(tt.label), hints[0].Label)
+			// The padding that lines the amount up has tests of its own.
+			assert.Equal(t, tt.label, strings.TrimLeft(fmt.Sprint(hints[0].Label), " "))
 		})
 	}
 }

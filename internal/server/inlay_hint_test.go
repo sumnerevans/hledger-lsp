@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -23,10 +24,9 @@ func TestInlayHint_LocalInferredAmount(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, hints, 1)
-	assert.Equal(t, protocol.String("-50 $"), hints[0].Label)
+	// assets:cash ends at 15 and amounts start at 19.
+	assert.Equal(t, protocol.String("    -50 $"), hints[0].Label)
 	assert.Equal(t, uint32(2), hints[0].Position.Line)
-	require.NotNil(t, hints[0].PaddingLeft)
-	assert.True(t, *hints[0].PaddingLeft)
 }
 
 func TestInlayHint_InferredAmountAnchoredAtLineEnd(t *testing.T) {
@@ -140,7 +140,7 @@ func TestInlayHint_InferFinalPostingAtEOF(t *testing.T) {
 	hints, err := srv.InlayHint(context.Background(), &protocol.InlayHintParams{TextDocument: protocol.TextDocumentIdentifier{URI: docURI}, Range: protocol.Range{End: protocol.Position{Line: 10}}})
 	require.NoError(t, err)
 	require.Len(t, hints, 1)
-	assert.Equal(t, protocol.String("-142"), hints[0].Label)
+	assert.Equal(t, protocol.String("  -142"), hints[0].Label)
 }
 
 func TestInlayHint_InferredAmountIsNotWrittenLikeAnAssertion(t *testing.T) {
@@ -155,7 +155,7 @@ func TestInlayHint_InferredAmountIsNotWrittenLikeAnAssertion(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, hints, 1)
-	assert.Equal(t, protocol.String("-50 ₽"), hints[0].Label)
+	assert.Equal(t, "-50 ₽", strings.TrimLeft(labelText(t, hints[0]), " "))
 }
 
 func TestInlayHint_RunningBalanceOmittedWhereRegisterHidesThePosting(t *testing.T) {
@@ -388,18 +388,19 @@ func TestInlayHint_BalanceAssignmentShowsTheAmountItMoves(t *testing.T) {
 			require.NoError(t, err)
 			type placed struct {
 				line, character uint32
-				label           protocol.InlayHintLabel
+				label           string
 			}
 			var got []placed
 			for _, hint := range hints {
-				got = append(got, placed{hint.Position.Line, hint.Position.Character, hint.Label})
+				// The padding that lines the inferred amount up has tests of its own.
+				got = append(got, placed{hint.Position.Line, hint.Position.Character, strings.TrimLeft(fmt.Sprint(hint.Label), " ")})
 			}
 			assignAt := uint32(len("    ") + len([]rune("активы:дом")) + len("  "))
 			assert.Equal(t, []placed{
-				{3, assignAt, protocol.String("517,300.00 USD")},
-				{4, uint32(len("    equity:gains")), protocol.String("-517,300.00 USD")},
-				{7, assignAt, protocol.String("4,700.00 USD")},
-				{8, uint32(len("    equity:gains")), protocol.String("-4,700.00 USD")},
+				{3, assignAt, "517,300.00 USD"},
+				{4, uint32(len("    equity:gains")), "-517,300.00 USD"},
+				{7, assignAt, "4,700.00 USD"},
+				{8, uint32(len("    equity:gains")), "-4,700.00 USD"},
 			}, got)
 			assert.Nil(t, hints[0].PaddingLeft)
 		})

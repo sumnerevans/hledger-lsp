@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/shopspring/decimal"
 	"go.lsp.dev/protocol"
@@ -49,8 +51,10 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 	}
 
 	mapper := lsputil.NewPositionMapper(content)
+	lines := splitLines(content)
+	alignment := s.lazyDocumentAlignment(params.TextDocument.URI, readings[0].journal, content, settings.Formatting)
 	hints := make([]protocol.InlayHint, 0)
-	emit := func(posting *ast.Posting, effectAt func(reading int) (analyzer.PostingEffect, bool), balanceAt, assignedAt, movedAt func(occurrence int) map[string]decimal.Decimal) {
+	emit := func(transaction *ast.Transaction, posting *ast.Posting, effectAt func(reading int) (analyzer.PostingEffect, bool), balanceAt, assignedAt, movedAt func(occurrence int) map[string]decimal.Decimal) {
 		offset := posting.Range.Start.Offset
 		if settings.InlayHints.InferredAmounts {
 			// A posting of a transaction with a balance assignment has the amount
@@ -59,6 +63,15 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 			// another reading infers an amount, the zero is one of the values,
 			// so the amount is not taken to hold in every inclusion.
 			var values, zeros []hintValue
+			// The first value is the one lined up; the others follow it.
+			var firstAmounts map[string]decimal.Decimal
+			var firstFormats map[string]formatter.CommodityFormat
+			addValue := func(amounts map[string]decimal.Decimal, formats map[string]formatter.CommodityFormat, refs []occurrenceRef) {
+				if firstAmounts == nil {
+					firstAmounts, firstFormats = amounts, formats
+				}
+				values = addHintValue(values, formatAmounts(amounts, formats), refs)
+			}
 			assigned := false
 			for index, occurrence := range occurrences {
 				raw := assignedAt(index)
@@ -66,7 +79,7 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 				assigned = assigned || ok
 				switch {
 				case ok && len(amounts) > 0:
-					values = addHintValue(values, formatAmounts(amounts, occurrence.formatsAt(offset)), []occurrenceRef{occurrence.ref})
+					addValue(amounts, occurrence.formatsAt(offset), []occurrenceRef{occurrence.ref})
 				case ok:
 					zeros = addHintValue(zeros, zeroAmounts(raw, occurrence.formatsAt(offset)), []occurrenceRef{occurrence.ref})
 				}
@@ -76,7 +89,7 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 					effect, ok := effectAt(index)
 					switch {
 					case ok && len(effect.InferredAmounts) > 0:
-						values = addHintValue(values, formatAmounts(effect.InferredAmounts, readings[index].formatsAt(offset)), readings[index].includedFrom)
+						addValue(effect.InferredAmounts, readings[index].formatsAt(offset), readings[index].includedFrom)
 					case ok && effect.InferredZero != nil:
 						zeros = addHintValue(zeros, zeroAmounts(effect.InferredZero, readings[index].formatsAt(offset)), readings[index].includedFrom)
 					}
@@ -102,7 +115,20 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 				// The label is the bare amount: a leading "=" would read as a balance
 				// assertion, which this is not.
 				accountEnd := mapper.ByteToLSP(posting.Account.Range.End.Offset)
-				hints = appendHintInRange(hints, params.Range, valuedHint(mapper.LineEndPosition(int(accountEnd.Line)), "", values))
+				label := values[0].text
+				gap := func(writtenEnd int) int {
+					if settings.InlayHints.InferredAmountAlignment == inferredAlignTransaction {
+						if column, ok := transactionDecimalColumn(lines, transaction); ok {
+							prefix := amountIntegerWidth(label, labelDecimalMark(firstAmounts, firstFormats))
+							return max(column-prefix-writtenEnd, minHintGap)
+						}
+					}
+					return amountSpacesFromAlignment(writtenEnd, label, alignment(), settings.Formatting)
+				}
+				padding, aligned := inferredHintPadding(lines, posting, gap)
+				hint := valuedHint(mapper.LineEndPosition(int(accountEnd.Line)), strings.Repeat(" ", padding), values)
+				hint.PaddingLeft = boolPtr(!aligned)
+				hints = appendHintInRange(hints, params.Range, hint)
 			}
 		}
 		if settings.InlayHints.CostExpansion && posting.Cost != nil {
@@ -142,7 +168,7 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 				continue
 			}
 			ref := analyzer.PostingRef{TransactionIndex: effect.TransactionIndex, PostingIndex: effect.PostingIndex}
-			emit(posting, func(int) (analyzer.PostingEffect, bool) { return effect, true },
+			emit(&readings[0].journal.Transactions[effect.TransactionIndex], posting, func(int) (analyzer.PostingEffect, bool) { return effect, true },
 				func(occurrence int) map[string]decimal.Decimal { return occurrences[occurrence].replay.Balances[ref] },
 				func(occurrence int) map[string]decimal.Decimal { return occurrences[occurrence].replay.Assigned[ref] },
 				func(occurrence int) map[string]decimal.Decimal { return occurrences[occurrence].replay.Moved[ref] })
@@ -157,6 +183,8 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 	located := make([]map[int]locatedEffect, len(readings))
 	var offsets []int
 	known := make(map[int]*ast.Posting)
+	// Any reading's transaction serves: only where its amounts are written is read.
+	knownTransactions := make(map[int]*ast.Transaction)
 	for index := range readings {
 		if readings[index].other == nil {
 			located[index] = locateEffects(readings[index].journal, primaryEffects)
@@ -166,6 +194,7 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 		for offset, entry := range located[index] {
 			if _, seen := known[offset]; !seen {
 				known[offset] = entry.posting
+				knownTransactions[offset] = &readings[index].journal.Transactions[entry.effect.TransactionIndex]
 				offsets = append(offsets, offset)
 			}
 		}
@@ -180,7 +209,7 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 		if !postingTouchesRange(mapper, posting, params.Range) {
 			continue
 		}
-		emit(posting, func(index int) (analyzer.PostingEffect, bool) {
+		emit(knownTransactions[offset], posting, func(index int) (analyzer.PostingEffect, bool) {
 			entry, ok := located[index][offset]
 			return entry.effect, ok
 		}, func(occurrence int) map[string]decimal.Decimal { return replaysByOffset[occurrence].balances[offset] },
@@ -449,6 +478,102 @@ func journalTransactions(journal *ast.Journal) []include.SourcedTransaction {
 		sourced[i] = include.SourcedTransaction{Index: i, Transaction: journal.Transactions[i]}
 	}
 	return sourced
+}
+
+// minHintGap is the separation hledger requires between account and amount.
+const minHintGap = 2
+
+// inferredHintPadding returns how many spaces after the end of posting's line
+// put an amount gap cells past the account, where gap receives the display column
+// the account ends at. A hint can only sit where text exists, so the distance has
+// to be carried by the label.
+//
+// ok is false when the column cannot be reached: the line already runs past it,
+// or holds something other than the account, such as a comment.
+func inferredHintPadding(lines []string, posting *ast.Posting, gap func(writtenEnd int) int) (padding int, ok bool) {
+	lineIndex := posting.Account.Range.End.Line - 1
+	if lineIndex < 0 || lineIndex >= len(lines) {
+		return 0, false
+	}
+	line := strings.TrimSuffix(lines[lineIndex], "\r")
+	written := strings.TrimRight(line, " \t")
+
+	accountEnd := lsputil.UTF16OffsetToByteOffset(line, lsputil.RuneOffsetToUTF16Offset(line, posting.Account.Range.End.Column-1))
+	if accountEnd < 0 || accountEnd > len(written) || strings.Trim(written[accountEnd:], "])") != "" {
+		return 0, false
+	}
+
+	writtenEnd := formatter.DisplayWidthInLine(line, len(written), formatter.DefaultTabSize)
+	lineEnd := formatter.DisplayWidthInLine(line, len(line), formatter.DefaultTabSize)
+	padding = writtenEnd + gap(writtenEnd) - lineEnd
+	if padding < 0 {
+		return 0, false
+	}
+	return padding, true
+}
+
+// transactionDecimalColumn returns the display column of the decimal point of the
+// first amount written in transaction: where its integer part ends, for an amount
+// with no decimal point. Journals line decimal points up within a transaction
+// even where nothing lines up across the file.
+func transactionDecimalColumn(lines []string, transaction *ast.Transaction) (int, bool) {
+	for i := range transaction.Postings {
+		amount := transaction.Postings[i].Amount
+		if amount == nil || amount.RawQuantity == "" {
+			continue
+		}
+		lineIndex := amount.Range.Start.Line - 1
+		if lineIndex < 0 || lineIndex >= len(lines) {
+			continue
+		}
+		line := strings.TrimSuffix(lines[lineIndex], "\r")
+		start := lsputil.UTF16OffsetToByteOffset(line, lsputil.RuneOffsetToUTF16Offset(line, amount.Range.Start.Column-1))
+		if start < 0 || start > len(line) {
+			continue
+		}
+		// The sign is part of the raw text but can sit apart from the digits: -$5.
+		integerPart := strings.TrimLeft(amount.RawQuantity, "+-")
+		offset := strings.Index(line[start:], integerPart)
+		if offset < 0 {
+			continue
+		}
+		if amount.Quantity.Exponent() < 0 {
+			integerPart = integerPart[:strings.LastIndexFunc(integerPart, func(r rune) bool { return !unicode.IsDigit(r) })]
+		}
+		return formatter.DisplayWidthInLine(line, start+offset+len(integerPart), formatter.DefaultTabSize), true
+	}
+	return 0, false
+}
+
+// labelDecimalMark returns the decimal mark of the first amount formatAmounts
+// writes for amounts.
+func labelDecimalMark(amounts map[string]decimal.Decimal, formats map[string]formatter.CommodityFormat) rune {
+	commodities := slices.Sorted(maps.Keys(amounts))
+	if len(commodities) > 0 {
+		if format, ok := formats[commodities[0]]; ok && format.DecimalMark != 0 {
+			return format.DecimalMark
+		}
+	}
+	return '.'
+}
+
+// amountIntegerWidth returns the display width of text up to the decimal mark of
+// its first number, or to the end of that number when it has none.
+func amountIntegerWidth(text string, mark rune) int {
+	start := strings.IndexFunc(text, unicode.IsDigit)
+	if start < 0 {
+		return formatter.DisplayWidth(text)
+	}
+	number := text[start:]
+	if end := strings.IndexFunc(number, func(r rune) bool {
+		return !unicode.IsDigit(r) && r != '.' && r != ','
+	}); end >= 0 {
+		number = number[:end]
+	}
+	if decimalMark := strings.LastIndexByte(number, byte(mark)); decimalMark >= 0 {
+		number = number[:decimalMark]
+	}
+	return formatter.DisplayWidth(text[:start+len(number)])
 }
 
 func appendHintInRange(hints []protocol.InlayHint, requestRange protocol.Range, hint protocol.InlayHint) []protocol.InlayHint {

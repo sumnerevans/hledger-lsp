@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/shopspring/decimal"
 	"go.lsp.dev/protocol"
@@ -39,19 +40,7 @@ func (s *Server) getInferredAmountCodeActions(params *protocol.CodeActionParams)
 
 	// Alignment walks every transaction, and code actions are requested on
 	// every cursor move, so pay for it only once a posting actually qualifies.
-	var alignment formatter.AlignmentInfo
-	alignmentComputed := false
-	computeAlignment := func() formatter.AlignmentInfo {
-		if !alignmentComputed {
-			commodityFormats := formatter.ExtractCommodityFormats(journal.Directives)
-			if workspaceFormats := s.commodityFormatsForDocument(params.TextDocument.URI); workspaceFormats != nil {
-				commodityFormats = workspaceFormats
-			}
-			alignment = formatter.ComputeAmountAlignment(journal, doc, commodityFormats, formatterOptionsFrom(settings.Formatting))
-			alignmentComputed = true
-		}
-		return alignment
-	}
+	computeAlignment := s.lazyDocumentAlignment(params.TextDocument.URI, journal, doc, settings.Formatting)
 
 	// The occurrences are listed only once a posting qualifies, like the alignment.
 	var readings []occurrenceReading
@@ -250,6 +239,19 @@ func postingAmounts(posting *ast.Posting) []*ast.Amount {
 func postingLineInRange(posting *ast.Posting, requested protocol.Range) bool {
 	line := posting.Account.Range.End.Line - 1
 	return line >= int(requested.Start.Line) && line <= int(requested.End.Line)
+}
+
+// lazyDocumentAlignment returns a function yielding the formatter's alignment for
+// the document, computed on first use. Alignment walks every transaction, so a
+// request that turns out not to need it should not pay for it.
+func (s *Server) lazyDocumentAlignment(docURI uri.URI, journal *ast.Journal, doc string, formatting formattingSettings) func() formatter.AlignmentInfo {
+	return sync.OnceValue(func() formatter.AlignmentInfo {
+		commodityFormats := formatter.ExtractCommodityFormats(journal.Directives)
+		if workspaceFormats := s.commodityFormatsForDocument(docURI); workspaceFormats != nil {
+			commodityFormats = workspaceFormats
+		}
+		return formatter.ComputeAmountAlignment(journal, doc, commodityFormats, formatterOptionsFrom(formatting))
+	})
 }
 
 // buildInferredAmountEdit replaces whatever whitespace follows the account name

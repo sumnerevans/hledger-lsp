@@ -409,6 +409,9 @@ func TestParseSettingsFromRaw_FlatKeys(t *testing.T) {
 
 func TestParseSettingsFromRaw_InlayHints(t *testing.T) {
 	base := defaultServerSettings()
+	if base.InlayHints.InferredAmountAlignment != inferredAlignTransaction {
+		t.Fatalf("default inferred amount alignment = %q", base.InlayHints.InferredAmountAlignment)
+	}
 	if !base.Features.InlayHints || !base.InlayHints.InferredAmounts || base.InlayHints.RunningBalances || base.InlayHints.CostExpansion {
 		t.Fatal("unexpected inlay hint defaults")
 	}
@@ -1141,7 +1144,9 @@ func TestInitialized_StaleConfigurationReplyKeepsTheNewerSettings(t *testing.T) 
 
 	changed.reply <- heldConfigReply{settings: []protocol.LSPAny{newer}}
 	client.nextRefresh(t)
-	assert.Equal(t, inlayHintSettings{}, srv.getSettings().InlayHints)
+	// The newer reply turns every hint off, and a setting it leaves out takes its default.
+	newerSettings := inlayHintSettings{InferredAmountAlignment: inferredAlignTransaction}
+	assert.Equal(t, newerSettings, srv.getSettings().InlayHints)
 
 	startup.reply <- heldConfigReply{settings: []protocol.LSPAny{older}}
 	select {
@@ -1149,7 +1154,7 @@ func TestInitialized_StaleConfigurationReplyKeepsTheNewerSettings(t *testing.T) 
 	case <-time.After(5 * time.Second):
 		t.Fatal("the startup fetch did not finish")
 	}
-	assert.Equal(t, inlayHintSettings{}, srv.getSettings().InlayHints, "the startup reply restored older settings")
+	assert.Equal(t, newerSettings, srv.getSettings().InlayHints, "the startup reply restored older settings")
 	assert.Empty(t, inlayHintLabels(t, srv, docURI))
 }
 
@@ -1160,7 +1165,8 @@ func TestInitialized_StaleConfigurationReplyKeepsTheNewerSettings(t *testing.T) 
 func TestRefreshConfiguration_RepliesInAnyOrderKeepTheNewestSettings(t *testing.T) {
 	older := mustMarshalLSPAny(t, map[string]any{"inlayHints": map[string]any{"inferredAmounts": true, "runningBalances": true}})
 	newer := mustMarshalLSPAny(t, map[string]any{"inlayHints": map[string]any{"inferredAmounts": false, "runningBalances": false}})
-	olderSettings := inlayHintSettings{InferredAmounts: true, RunningBalances: true}
+	olderSettings := inlayHintSettings{InferredAmounts: true, RunningBalances: true, InferredAmountAlignment: inferredAlignTransaction}
+	newerSettings := inlayHintSettings{InferredAmountAlignment: inferredAlignTransaction}
 	defaults := defaultServerSettings().InlayHints
 	type answer struct {
 		fetch int
@@ -1275,7 +1281,12 @@ func TestRefreshConfiguration_RepliesInAnyOrderKeepTheNewestSettings(t *testing.
 				}
 			}
 
-			assert.Equal(t, tc.want, srv.getSettings().InlayHints)
+			want := tc.want
+			if want == (inlayHintSettings{}) {
+				// No want is the newer reply, which turns every hint off.
+				want = newerSettings
+			}
+			assert.Equal(t, want, srv.getSettings().InlayHints)
 			assert.Len(t, client.refreshes, tc.wantRefreshes)
 			labels := inlayHintLabels(t, srv, docURI)
 			if tc.want.RunningBalances {
@@ -1287,5 +1298,29 @@ func TestRefreshConfiguration_RepliesInAnyOrderKeepTheNewestSettings(t *testing.
 				assert.Empty(t, labels)
 			}
 		})
+	}
+}
+
+func TestParseSettingsFromRaw_InferredAmountAlignment(t *testing.T) {
+	base := defaultServerSettings()
+
+	nested := parseSettingsFromRaw(base, map[string]interface{}{
+		"inlayHints": map[string]interface{}{"inferredAmountAlignment": "formatter"},
+	})
+	if nested.InlayHints.InferredAmountAlignment != inferredAlignFormatter {
+		t.Fatalf("nested = %q", nested.InlayHints.InferredAmountAlignment)
+	}
+
+	flat := parseSettingsFromRaw(base, map[string]interface{}{"inlayHints.inferredAmountAlignment": "formatter"})
+	if flat.InlayHints.InferredAmountAlignment != inferredAlignFormatter {
+		t.Fatalf("flat = %q", flat.InlayHints.InferredAmountAlignment)
+	}
+
+	invalid, issues := parseSettingsFromRawWithIssues(base, map[string]interface{}{"inlayHints.inferredAmountAlignment": "sideways"})
+	if invalid.InlayHints.InferredAmountAlignment != inferredAlignTransaction {
+		t.Fatalf("invalid value kept: %q", invalid.InlayHints.InferredAmountAlignment)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("issues = %v", issues)
 	}
 }

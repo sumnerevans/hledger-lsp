@@ -31,9 +31,22 @@ type featureSettings struct {
 
 type inlayHintSettings struct {
 	InferredAmounts bool
-	RunningBalances bool
-	CostExpansion   bool
+	// InferredAmountAlignment selects the column of an inferred amount hint; see
+	// inferredAlignTransaction and inferredAlignFormatter.
+	InferredAmountAlignment string
+	RunningBalances         bool
+	CostExpansion           bool
 }
+
+// Alignment values for inlayHints.inferredAmountAlignment.
+const (
+	// inferredAlignTransaction lines a hint's decimal point up with the amounts
+	// written in its own transaction, whichever tool formatted them.
+	inferredAlignTransaction = "transaction"
+	// inferredAlignFormatter puts a hint where this server's formatter would put
+	// the amount, which only matches the text once the file has been formatted.
+	inferredAlignFormatter = "formatter"
+)
 
 // Account scope values for completion.accountScope.
 const (
@@ -126,7 +139,7 @@ func defaultServerSettings() serverSettings {
 			CodeLens:         false,
 			InlayHints:       true,
 		},
-		InlayHints: inlayHintSettings{InferredAmounts: true},
+		InlayHints: inlayHintSettings{InferredAmounts: true, InferredAmountAlignment: inferredAlignTransaction},
 		Completion: completionSettings{
 			MaxResults:    50,
 			FuzzyMatching: true,
@@ -187,6 +200,14 @@ func normalizeServerSettingsWithIssues(settings serverSettings) (serverSettings,
 		issues = append(issues, fmt.Sprintf("hledger.completion.accountScope=%q is not one of %q, %q; using %q",
 			settings.Completion.AccountScope, accountScopeNonzero, accountScopeAll, defaults.Completion.AccountScope))
 		settings.Completion.AccountScope = defaults.Completion.AccountScope
+	}
+	switch settings.InlayHints.InferredAmountAlignment {
+	case inferredAlignTransaction, inferredAlignFormatter:
+		// valid
+	default:
+		issues = append(issues, fmt.Sprintf("hledger.inlayHints.inferredAmountAlignment=%q is not one of %q, %q; using %q",
+			settings.InlayHints.InferredAmountAlignment, inferredAlignTransaction, inferredAlignFormatter, defaults.InlayHints.InferredAmountAlignment))
+		settings.InlayHints.InferredAmountAlignment = defaults.InlayHints.InferredAmountAlignment
 	}
 	if settings.Formatting.IndentSize <= 0 {
 		issues = append(issues, fmt.Sprintf("hledger.formatting.indentSize=%d is not positive; using %d", settings.Formatting.IndentSize, defaults.Formatting.IndentSize))
@@ -522,6 +543,9 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 		if value, ok := toBool(inlayHintsRaw["inferredAmounts"]); ok {
 			settings.InlayHints.InferredAmounts = value
 		}
+		if value, ok := toString(inlayHintsRaw["inferredAmountAlignment"]); ok {
+			settings.InlayHints.InferredAmountAlignment = value
+		}
 		if value, ok := toBool(inlayHintsRaw["runningBalances"]); ok {
 			settings.InlayHints.RunningBalances = value
 		}
@@ -531,6 +555,9 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 	}
 	if value, ok := toBool(raw["inlayHints.inferredAmounts"]); ok {
 		settings.InlayHints.InferredAmounts = value
+	}
+	if value, ok := toString(raw["inlayHints.inferredAmountAlignment"]); ok {
+		settings.InlayHints.InferredAmountAlignment = value
 	}
 	if value, ok := toBool(raw["inlayHints.runningBalances"]); ok {
 		settings.InlayHints.RunningBalances = value

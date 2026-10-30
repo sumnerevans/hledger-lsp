@@ -33,8 +33,14 @@ watched journal-file changes; saving is not required.
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `hledger.inlayHints.inferredAmounts` | `true` | Show the inferred amount for a single elided posting |
+| `hledger.inlayHints.inferredAmountAlignment` | `"transaction"` | Where an inferred amount hint lines up: `"transaction"` (decimal point of the amounts written in its transaction) or `"formatter"` (the column this server's formatter would use) |
 | `hledger.inlayHints.runningBalances` | `false` | Show the account balance after each posting |
 | `hledger.inlayHints.costExpansion` | `false` | Show the signed balancing contribution of `@` and `@@` costs |
+
+`"transaction"` suits a journal formatted by another tool, such as `hledger-fmt`.
+`"formatter"` matches the text only once the file has been formatted by
+this server. A hint on a line that already runs past the column, or that has a
+comment after the account, stays at the end of the line.
 
 Running balances follow hledger's register: balance assignments are resolved,
 and a posting with its own `date:` applies at that date, so its hint shows the
@@ -345,6 +351,7 @@ inputs: the server never runs `import`, `add` or `--new`.
   "hledger.features.codeLens": false,
   "hledger.features.inlayHints": true,
   "hledger.inlayHints.inferredAmounts": true,
+  "hledger.inlayHints.inferredAmountAlignment": "transaction",
   "hledger.inlayHints.runningBalances": false,
   "hledger.inlayHints.costExpansion": false,
   "hledger.completion.maxResults": 100,

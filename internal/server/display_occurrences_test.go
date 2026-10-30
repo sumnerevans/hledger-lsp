@@ -24,11 +24,13 @@ func hintsAt(t *testing.T, ts *testServer, docURI uri.URI) []protocol.InlayHint 
 	return hints
 }
 
+// inlayLabelsOf returns the hints' labels without the padding that lines an
+// inferred amount up with the amounts around it, which these tests do not check.
 func inlayLabelsOf(hints []protocol.InlayHint) []string {
 	labels := make([]string, 0, len(hints))
 	for _, hint := range hints {
 		label, _ := hint.Label.(protocol.String)
-		labels = append(labels, string(label))
+		labels = append(labels, strings.TrimLeft(string(label), " "))
 	}
 	return labels
 }
@@ -286,4 +288,31 @@ func TestInlayHint_InferredAmountAndBalanceOfALoneDocumentAreWrittenAlike(t *tes
 	labels := inlayLabelsOf(hintsAt(t, ts, docURI))
 	assert.Contains(t, labels, "-12,345.000 Y")
 	assert.Contains(t, labels, "balance: -12,345.000 Y")
+}
+
+// A hint that joins the values of several occurrences is lined up by its first
+// value, like a hint with one; the padding is the label's alone, not the
+// tooltip's.
+func TestInlayHint_InferredAmountOfEveryOccurrenceIsAligned(t *testing.T) {
+	for _, layout := range conflictingMarkLayouts() {
+		for variant, shared := range crlfVariants("2024-01-01 x\n    расходы:еда  1,500 USD\n    現金\n") {
+			t.Run(layout.name+"/"+variant, func(t *testing.T) {
+				ts, _, docURI, _ := setupOccurrences(t, layout, shared)
+				enableHints(ts, true, false, false)
+
+				hints := hintsAt(t, ts, docURI)
+				require.Len(t, hints, 1)
+				require.NotNil(t, hints[0].PaddingLeft)
+				assert.False(t, *hints[0].PaddingLeft, "client padding would push the label off the column")
+
+				label := labelText(t, hints[0])
+				values := strings.TrimLeft(label, " ")
+				assert.GreaterOrEqual(t, len(label)-len(values), minHintGap, label)
+				assert.ElementsMatch(t, []string{"-1,5 USD", "-1,500. USD"}, strings.Split(values, " | "))
+				for _, line := range strings.Split(tooltipString(hints[0].Tooltip), "\n") {
+					assert.False(t, strings.HasPrefix(line, " "), "tooltip line %q", line)
+				}
+			})
+		}
+	}
 }
