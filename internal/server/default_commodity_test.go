@@ -109,7 +109,7 @@ func TestInlayHint_BareAmountsReportDefaultCommodity(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, hints, 1)
-	assert.Equal(t, protocol.String("= -50,00 RUB"), hints[0].Label)
+	assert.Equal(t, protocol.String("-50,00 RUB"), hints[0].Label)
 }
 
 // A bare amount is not a written occurrence of the commodity for references:
@@ -188,12 +188,12 @@ func TestInlayHint_SymbolLessDefaultCommodityKeepsTheOneInForce(t *testing.T) {
 		{
 			"Cyrillic CRLF",
 			"D 1.000,00 руб\r\nD 1000.\r\n\r\n2024-01-15 покупка\r\n    расходы:еда  1.500\r\n    активы:касса\r\n",
-			"= -1.500,00 руб",
+			"-1.500,00 руб",
 		},
 		{
 			"symbol LF",
 			"D 1000.00 X\nD 1000,\n\n2024-01-15 x\n    a  1,5\n    b\n",
-			"= -15.00 X",
+			"-15.00 X",
 		},
 	}
 	for _, tt := range tests {

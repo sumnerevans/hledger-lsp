@@ -203,7 +203,7 @@ func TestFeatures_ReadAmountsWithIncludeContext(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Len(t, hints, 1)
-		assert.Equal(t, protocol.String("= -1,234.000 FDRXX"), hints[0].Label)
+		assert.Equal(t, protocol.String("-1,234.000 FDRXX"), hints[0].Label)
 	})
 
 	t.Run("hover", func(t *testing.T) {

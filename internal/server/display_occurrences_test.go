@@ -105,9 +105,8 @@ func TestInlayHint_InferredAmountJoinsTheValuesOfEveryOccurrence(t *testing.T) {
 			hints := hintsAt(t, ts, docURI)
 			require.Len(t, hints, 1)
 			label := inlayLabelsOf(hints)[0]
-			require.True(t, strings.HasPrefix(label, "= "), label)
 			// Each value is written in the style of the occurrence that reads it.
-			assert.ElementsMatch(t, []string{"-1,5 USD", "-1,500. USD"}, strings.Split(strings.TrimPrefix(label, "= "), " | "))
+			assert.ElementsMatch(t, []string{"-1,5 USD", "-1,500. USD"}, strings.Split(label, " | "))
 
 			tooltip := tooltipString(hints[0].Tooltip)
 			assert.Contains(t, tooltip, "-1,5 USD")
@@ -138,7 +137,7 @@ func TestInlayHint_AgreeingOccurrencesShowOneValueWithoutTooltip(t *testing.T) {
 
 	hints := hintsAt(t, ts, docURI)
 	require.Len(t, hints, 1)
-	assert.Equal(t, "= -10 USD", inlayLabelsOf(hints)[0])
+	assert.Equal(t, "-10 USD", inlayLabelsOf(hints)[0])
 	assert.Nil(t, hints[0].Tooltip)
 }
 
@@ -263,7 +262,7 @@ func TestInlayHint_ValuesOfDifferentPostingsAreNeverJoined(t *testing.T) {
 
 	hints := hintsAt(t, ts, docURI)
 	labels := inlayLabelsOf(hints)
-	assert.ElementsMatch(t, []string{"= -10 EUR", "= -20 EUR"}, labels)
+	assert.ElementsMatch(t, []string{"-10 EUR", "-20 EUR"}, labels)
 	for _, hint := range hints {
 		assert.Nil(t, hint.Tooltip, "no posting reads two ways")
 	}
@@ -285,6 +284,6 @@ func TestInlayHint_InferredAmountAndBalanceOfALoneDocumentAreWrittenAlike(t *tes
 	enableHints(ts, true, false, true)
 
 	labels := inlayLabelsOf(hintsAt(t, ts, docURI))
-	assert.Contains(t, labels, "= -12,345.000 Y")
+	assert.Contains(t, labels, "-12,345.000 Y")
 	assert.Contains(t, labels, "balance: -12,345.000 Y")
 }

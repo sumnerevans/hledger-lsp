@@ -98,8 +98,11 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 				// name: an inlay hint takes up room in the rendered line, so a hint
 				// placed mid-line pushes the alignment padding — and the cursor
 				// waiting at the amount column — to the right.
+				//
+				// The label is the bare amount: a leading "=" would read as a balance
+				// assertion, which this is not.
 				accountEnd := mapper.ByteToLSP(posting.Account.Range.End.Offset)
-				hints = appendHintInRange(hints, params.Range, valuedHint(mapper.LineEndPosition(int(accountEnd.Line)), "= ", values))
+				hints = appendHintInRange(hints, params.Range, valuedHint(mapper.LineEndPosition(int(accountEnd.Line)), "", values))
 			}
 		}
 		if settings.InlayHints.CostExpansion && posting.Cost != nil {

@@ -50,8 +50,8 @@ func TestInlayHint_ZeroInferredAmountKeepsItsInclusion(t *testing.T) {
 			assignment := hintAtLine(t, hints, 1, "")
 			assert.Equal(t, "350 USD | 0 USD", inlayLabelsOf([]protocol.InlayHint{assignment})[0])
 
-			elided := hintAtLine(t, hints, 2, "= ")
-			assert.Equal(t, "= -350 USD | 0 USD", inlayLabelsOf([]protocol.InlayHint{elided})[0])
+			elided := hintAtLine(t, hints, 2, "")
+			assert.Equal(t, "-350 USD | 0 USD", inlayLabelsOf([]protocol.InlayHint{elided})[0])
 			tooltip := tooltipString(elided.Tooltip)
 			assert.Contains(t, tooltip, "-350 USD (when included from main.journal:5)")
 			assert.Contains(t, tooltip, "0 USD (when included from main.journal:11)")
@@ -71,8 +71,8 @@ func TestInlayHint_ZeroInferredAmountKeepsItsInclusion(t *testing.T) {
 			enableHints(ts, true, false, false)
 
 			hints := hintsAt(t, ts, docURI)
-			elided := hintAtLine(t, hints, 3, "= ")
-			assert.Equal(t, "= 999 EUR | 0 EUR", inlayLabelsOf([]protocol.InlayHint{elided})[0])
+			elided := hintAtLine(t, hints, 3, "")
+			assert.Equal(t, "999 EUR | 0 EUR", inlayLabelsOf([]protocol.InlayHint{elided})[0])
 			tooltip := tooltipString(elided.Tooltip)
 			assert.Contains(t, tooltip, "999 EUR (when included from main.journal:4)")
 			assert.Contains(t, tooltip, "0 EUR (when included from main.journal:2)")
@@ -111,8 +111,8 @@ func TestInlayHint_ZeroInferredAmountInADiamond(t *testing.T) {
 	ts, docURI := formatServer(t, dir, filepath.Join(dir, "child.journal"), child)
 	enableHints(ts, true, false, false)
 
-	elided := hintAtLine(t, hintsAt(t, ts, docURI), 2, "= ")
-	assert.Equal(t, "= -350 USD | 0 USD", inlayLabelsOf([]protocol.InlayHint{elided})[0])
+	elided := hintAtLine(t, hintsAt(t, ts, docURI), 2, "")
+	assert.Equal(t, "-350 USD | 0 USD", inlayLabelsOf([]protocol.InlayHint{elided})[0])
 	tooltip := tooltipString(elided.Tooltip)
 	assert.Contains(t, tooltip, "via a.journal:1")
 	assert.Contains(t, tooltip, "via b.journal:1")

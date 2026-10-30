@@ -134,7 +134,7 @@ func TestInlayHint_DefaultSettingsDoNotReplayWholeTree(t *testing.T) {
 	labels := inlayLabels(t, srv, docURI, open)
 	runtime.ReadMemStats(&after)
 
-	assert.Equal(t, []protocol.InlayHintLabel{protocol.String("= -1 USD")}, labels)
+	assert.Equal(t, []protocol.InlayHintLabel{protocol.String("-1 USD")}, labels)
 	const budget = 20 << 20
 	assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(budget),
 		"running balances are off, so the tree's balances must not be computed")
