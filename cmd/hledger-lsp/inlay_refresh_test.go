@@ -82,7 +82,7 @@ func TestLSPWire_InlayHintsAnsweredBeforeTheRefreshIs(t *testing.T) {
 		for _, hint := range got.hints {
 			labels = append(labels, hint.Label)
 		}
-		assert.Contains(t, labels, protocol.String("balance: 50 $"))
+		assert.Contains(t, labels, protocol.String("= 50 $"))
 	case <-ctx.Done():
 		t.Fatal("the server never asked the client to refresh its hints")
 	}

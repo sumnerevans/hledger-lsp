@@ -926,7 +926,7 @@ func TestInlayHint_WaitsForTheInitialConfiguration(t *testing.T) {
 	for _, hint := range <-answered {
 		labels = append(labels, hint.Label)
 	}
-	assert.Contains(t, labels, protocol.String("balance: 50 $"))
+	assert.Contains(t, labels, protocol.String("= 50 $"))
 }
 
 // gatedRefreshClient answers workspace/configuration with fixed settings, or
@@ -1024,9 +1024,9 @@ func TestInitialized_ConfigurationReadyBeforeInlayHintRefreshIsAnswered(t *testi
 				labels = append(labels, hint.Label)
 			}
 			if tc.refresh {
-				assert.Contains(t, labels, protocol.String("balance: 50 $"))
+				assert.Contains(t, labels, protocol.String("= 50 $"))
 			} else {
-				assert.NotContains(t, labels, protocol.String("balance: 50 $"))
+				assert.NotContains(t, labels, protocol.String("= 50 $"))
 			}
 		})
 	}
@@ -1290,9 +1290,9 @@ func TestRefreshConfiguration_RepliesInAnyOrderKeepTheNewestSettings(t *testing.
 			assert.Len(t, client.refreshes, tc.wantRefreshes)
 			labels := inlayHintLabels(t, srv, docURI)
 			if tc.want.RunningBalances {
-				assert.Contains(t, labels, protocol.String("balance: 50 $"))
+				assert.Contains(t, labels, protocol.String("= 50 $"))
 			} else {
-				assert.NotContains(t, labels, protocol.String("balance: 50 $"))
+				assert.NotContains(t, labels, protocol.String("= 50 $"))
 			}
 			if tc.want == (inlayHintSettings{}) {
 				assert.Empty(t, labels)

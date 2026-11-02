@@ -64,11 +64,11 @@ func TestInlayHint_RunningBalanceFollowsEditsToIncludedFile(t *testing.T) {
 			openDocument(t, srv, aURI, strings.ReplaceAll(doc, "\n", eol))
 			openDocument(t, srv, bURI, "2024-01-01 seed\n    assets:cash  100 USD\n    income:job\n")
 
-			require.Equal(t, protocol.String("balance: 90 USD"), requestHintLabels(t, srv, aURI)[0])
-			require.Equal(t, protocol.String("balance: 90 USD"), requestHintLabels(t, srv, aURI)[0])
+			require.Equal(t, protocol.String("= 90 USD"), requestHintLabels(t, srv, aURI)[0])
+			require.Equal(t, protocol.String("= 90 USD"), requestHintLabels(t, srv, aURI)[0])
 
 			replaceDocument(t, srv, bURI, 2, "2024-01-01 seed\n    assets:cash  500 USD\n    income:job\n")
-			assert.Equal(t, protocol.String("balance: 490 USD"), requestHintLabels(t, srv, aURI)[0])
+			assert.Equal(t, protocol.String("= 490 USD"), requestHintLabels(t, srv, aURI)[0])
 		})
 	}
 }
@@ -84,13 +84,13 @@ func TestInlayHint_RunningBalanceFollowsEditsToUnopenedIncludedFile(t *testing.T
 	aURI := uri.File(filepath.Join(dir, "a.journal"))
 	bPath := filepath.Join(dir, "b.journal")
 	openDocument(t, srv, aURI, doc)
-	require.Equal(t, protocol.String("balance: 90 USD"), requestHintLabels(t, srv, aURI)[0])
+	require.Equal(t, protocol.String("= 90 USD"), requestHintLabels(t, srv, aURI)[0])
 
 	require.NoError(t, os.WriteFile(bPath, []byte("2024-01-01 seed\n    assets:cash  300 USD\n    income:job\n"), 0o644))
 	require.NoError(t, srv.DidChangeWatchedFiles(context.Background(), &protocol.DidChangeWatchedFilesParams{
 		Changes: []protocol.FileEvent{{URI: uri.File(bPath), Type: protocol.FileChangeTypeChanged}},
 	}))
-	assert.Equal(t, protocol.String("balance: 290 USD"), requestHintLabels(t, srv, aURI)[0])
+	assert.Equal(t, protocol.String("= 290 USD"), requestHintLabels(t, srv, aURI)[0])
 }
 
 func TestInlayHint_RunningBalanceFollowsEditsToTheDocument(t *testing.T) {
@@ -102,10 +102,10 @@ func TestInlayHint_RunningBalanceFollowsEditsToTheDocument(t *testing.T) {
 	enableOnlyRunningBalances(srv)
 	aURI := uri.File(filepath.Join(dir, "a.journal"))
 	openDocument(t, srv, aURI, "2024-02-01 later\n    assets:cash  -10 USD\n    expenses:food\n")
-	require.Equal(t, protocol.String("balance: 90 USD"), requestHintLabels(t, srv, aURI)[0])
+	require.Equal(t, protocol.String("= 90 USD"), requestHintLabels(t, srv, aURI)[0])
 
 	replaceDocument(t, srv, aURI, 2, "2024-02-01 later\n    assets:cash  -40 USD\n    expenses:food\n")
-	assert.Equal(t, protocol.String("balance: 60 USD"), requestHintLabels(t, srv, aURI)[0])
+	assert.Equal(t, protocol.String("= 60 USD"), requestHintLabels(t, srv, aURI)[0])
 }
 
 func TestInlayHint_RunningBalanceOfLoneDocumentFollowsEdits(t *testing.T) {
@@ -113,11 +113,11 @@ func TestInlayHint_RunningBalanceOfLoneDocumentFollowsEdits(t *testing.T) {
 	enableOnlyRunningBalances(srv)
 	docURI := uri.URI("file:///lone.journal")
 	openDocument(t, srv, docURI, "2024-01-01 a\n    assets:cash  10 USD\n    income\n")
-	require.Equal(t, protocol.String("balance: 10 USD"), requestHintLabels(t, srv, docURI)[0])
-	require.Equal(t, protocol.String("balance: 10 USD"), requestHintLabels(t, srv, docURI)[0])
+	require.Equal(t, protocol.String("= 10 USD"), requestHintLabels(t, srv, docURI)[0])
+	require.Equal(t, protocol.String("= 10 USD"), requestHintLabels(t, srv, docURI)[0])
 
 	replaceDocument(t, srv, docURI, 2, "2024-01-01 a\n    assets:cash  25 USD\n    income\n")
-	assert.Equal(t, protocol.String("balance: 25 USD"), requestHintLabels(t, srv, docURI)[0])
+	assert.Equal(t, protocol.String("= 25 USD"), requestHintLabels(t, srv, docURI)[0])
 }
 
 func TestInlayHint_RunningBalancesAreReusedWhileNothingChanges(t *testing.T) {
@@ -200,5 +200,5 @@ func TestInlayHint_RunningBalancesUnderConcurrentEdits(t *testing.T) {
 	wg.Wait()
 
 	replaceDocument(t, srv, bURI, 100, "2024-01-01 seed\n    assets:cash  700 USD\n    income:job\n")
-	assert.Equal(t, protocol.String("balance: 690 USD"), requestHintLabels(t, srv, aURI)[0])
+	assert.Equal(t, protocol.String("= 690 USD"), requestHintLabels(t, srv, aURI)[0])
 }

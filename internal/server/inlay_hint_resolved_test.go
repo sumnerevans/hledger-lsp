@@ -64,7 +64,7 @@ func TestInlayHint_RunningBalanceNotTakenFromSiblingInclude(t *testing.T) {
 			a:    "2024-01-01 groceries\n    expenses:food  10 USD\n    assets:cash  -10 USD\n",
 			b:    "2024-02-01 rent\n    expenses:rent  100 USD\n    assets:cash  -100 USD\n",
 			expected: []protocol.InlayHintLabel{
-				protocol.String("balance: 10 USD"), protocol.String("balance: -10 USD"),
+				protocol.String("= 10 USD"), protocol.String("= -10 USD"),
 			},
 		},
 		{
@@ -72,7 +72,7 @@ func TestInlayHint_RunningBalanceNotTakenFromSiblingInclude(t *testing.T) {
 			a:    "2024-01-01 продукты\n    расходы:食品  10 ₽\n    активы:現金  -10 ₽\n",
 			b:    "2024-02-01 аренда\n    расходы:жильё  100 ₽\n    активы:現金  -100 ₽\n",
 			expected: []protocol.InlayHintLabel{
-				protocol.String("balance: 10 ₽"), protocol.String("balance: -10 ₽"),
+				protocol.String("= 10 ₽"), protocol.String("= -10 ₽"),
 			},
 		},
 		{
@@ -80,7 +80,7 @@ func TestInlayHint_RunningBalanceNotTakenFromSiblingInclude(t *testing.T) {
 			a:    "2024-01-01 groceries\r\n    expenses:food  10 USD\r\n    assets:cash  -10 USD\r\n",
 			b:    "2024-02-01 rent\r\n    expenses:rent  100 USD\r\n    assets:cash  -100 USD\r\n",
 			expected: []protocol.InlayHintLabel{
-				protocol.String("balance: 10 USD"), protocol.String("balance: -10 USD"),
+				protocol.String("= 10 USD"), protocol.String("= -10 USD"),
 			},
 		},
 	}
@@ -111,7 +111,7 @@ func TestInlayHint_RunningBalanceAccumulatesAcrossIncludes(t *testing.T) {
 
 	labels := inlayLabels(t, srv, uri.File(filepath.Join(dir, "a.journal")), a)
 	require.NotEmpty(t, labels)
-	assert.Equal(t, protocol.String("balance: 90 USD"), labels[0])
+	assert.Equal(t, protocol.String("= 90 USD"), labels[0])
 }
 
 func TestInlayHint_DefaultSettingsDoNotReplayWholeTree(t *testing.T) {
@@ -153,10 +153,10 @@ func TestInlayHint_RunningBalanceFollowsBalanceAssignment(t *testing.T) {
 			})
 			enableOnlyRunningBalances(srv)
 
+			// The assignment already says its balance, so only the other posting
+			// has one to show.
 			labels := inlayLabels(t, srv, uri.File(filepath.Join(dir, "a.journal")), strings.ReplaceAll(a, "\r\n", "\n"))
-			assert.Equal(t, []protocol.InlayHintLabel{
-				protocol.String("balance: 70 USD"), protocol.String("balance: 30 USD"),
-			}, labels)
+			assert.Equal(t, []protocol.InlayHintLabel{protocol.String("= 30 USD")}, labels)
 		})
 	}
 }
@@ -199,8 +199,13 @@ func TestInlayHint_ZeroRunningBalanceOfEachInclusion(t *testing.T) {
 						emptied = append(emptied, hint)
 					}
 				}
+				if mode == "assigned" {
+					// The assignment already says the account holds nothing.
+					assert.Empty(t, emptied)
+					return
+				}
 				require.Len(t, emptied, 1)
-				assert.Equal(t, protocol.String("balance: 0 USD | 0 EUR"), emptied[0].Label)
+				assert.Equal(t, protocol.String("= 0 USD | 0 EUR"), emptied[0].Label)
 				tooltip := strings.Split(tooltipString(emptied[0].Tooltip), "\n")
 				require.Len(t, tooltip, 2)
 				assert.True(t, strings.HasPrefix(tooltip[0], "0 USD (when included from "), tooltip[0])

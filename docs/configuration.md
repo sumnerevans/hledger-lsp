@@ -46,6 +46,25 @@ Running balances follow hledger's register: balance assignments are resolved,
 and a posting with its own `date:` applies at that date, so its hint shows the
 balance as of then.
 
+A running balance reads the way `hledger print -x` writes it, as a balance
+assertion after the amount. On a posting with an elided amount it follows the
+inferred amount. A posting that already asserts its balance shows only the
+commodities its assertion leaves out, and nothing for an inclusive (`=*`)
+assertion, which also counts subaccounts:
+
+```journal
+2026-02-09 Withdrawal
+    assets:checking   -7.98 USD = 10.00 USD, 20.00 EUR
+    equity:transfers   7.98 USD = 7.98 USD
+
+2026-04-06 Fee
+    assets:checking   -1.00 USD = 20.00 EUR, 9.00 USD
+    expenses:fees      1.00 USD = 1.00 USD
+```
+
+Everything after `assets:checking  -7.98 USD = 10.00 USD` is a hint, and so is
+everything after `-1.00 USD` and after the `expenses:fees` account name.
+
 ### Files included more than once
 
 hledger reads a file once per `include`, so one line can have several values: a
@@ -54,7 +73,7 @@ other, and a running balance depends on where in the journal the inclusion sits.
 hover show every distinct value instead of picking one.
 
 - A hint label joins the distinct values with ` | `, at most three, then `…` (for example
-  `balance: 10 USD | 20 USD | 30 USD | …`). The tooltip lists every value with the
+  `= 10 USD | 20 USD | 30 USD | …`). The tooltip lists every value with the
   includes that give it, as `file.journal:LINE`, the file and line of the `include`
   directive. Inferred amounts and cost expansion are shown per distinct include context.
   Running balances are shown per inclusion, in every include tree that owns the file.

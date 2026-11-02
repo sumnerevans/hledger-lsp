@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
+
+	"github.com/juev/hledger-lsp/internal/lsputil"
 )
 
 func TestInlayHint_LocalInferredAmount(t *testing.T) {
@@ -71,7 +73,7 @@ func TestInlayHint_CostAndChronologicalRunningBalance(t *testing.T) {
 		labels = append(labels, hint.Label)
 	}
 	assert.Contains(t, labels, protocol.String("cost: 20 $"))
-	assert.Contains(t, labels, protocol.String("balance: -15 $"))
+	assert.Contains(t, labels, protocol.String("= -15 $"))
 }
 
 func TestInlayHint_RunningBalanceOfDatedPostingUsesItsOwnDate(t *testing.T) {
@@ -95,8 +97,8 @@ func TestInlayHint_RunningBalanceOfDatedPostingUsesItsOwnDate(t *testing.T) {
 	for _, hint := range hints {
 		labels[hint.Position.Line] = hint.Label
 	}
-	assert.Equal(t, protocol.String("balance: -11 USD"), labels[1])
-	assert.Equal(t, protocol.String("balance: -1 USD"), labels[5])
+	assert.Equal(t, protocol.String("= -11 USD"), labels[1])
+	assert.Equal(t, protocol.String("= -1 USD"), labels[5])
 }
 
 func TestInlayHint_FeatureAndRangeGates(t *testing.T) {
@@ -183,10 +185,75 @@ func TestInlayHint_RunningBalanceOmittedWhereRegisterHidesThePosting(t *testing.
 			for _, hint := range hints {
 				labels[hint.Position.Line] = hint.Label
 			}
-			assert.Equal(t, protocol.String("balance: 100 ₽"), labels[1])
+			assert.Equal(t, protocol.String("= 100 ₽"), labels[1])
 			assert.NotContains(t, labels, uint32(5), "assignment that moves nothing")
 			assert.NotContains(t, labels, uint32(6), "elided posting balancing nothing")
-			assert.Equal(t, protocol.String("balance: 100 ₽"), labels[9], "written zero")
+			assert.Equal(t, protocol.String("= 100 ₽"), labels[9], "written zero")
+		})
+	}
+}
+
+// A running balance reads the way `hledger print -x` writes it: an assertion
+// after the written amount, or after the inferred one. A posting that asserts its
+// balance shows only the commodities its assertion leaves out.
+func TestInlayHint_RunningBalanceReadsAsAnAssertion(t *testing.T) {
+	for name, newline := range map[string]string{"lf": "\n", "crlf": "\r\n"} {
+		t.Run(name, func(t *testing.T) {
+			srv := NewServer()
+			settings := srv.getSettings()
+			settings.InlayHints.RunningBalances = true
+			srv.setSettings(settings)
+			docURI := uri.URI("file:///test.journal")
+			lines := []string{
+				"commodity 1,000.00 USD",
+				"commodity 1,000.00 EUR",
+				"",
+				"2026-02-01 seed",
+				"    активы:счёт  17.98 USD",
+				"    активы:счёт  20.00 EUR",
+				"    equity:opening",
+				"",
+				"2026-02-09 Перевод",
+				"    активы:счёт  -7.98 USD  =  10.00 USD  ; 現金",
+				"    equity:transfers  7.98 USD",
+				"",
+				"2026-04-06 Fee",
+				"    активы:счёт  -1.00 USD  ; 手数料",
+				"    expenses:fees",
+				"",
+				"2026-04-07 Check",
+				"    активы:счёт  0.00 USD =* 9.00 USD",
+				"    expenses:fees",
+				"",
+			}
+			srv.StoreDocument(docURI, strings.Join(lines, newline))
+
+			hints, err := srv.InlayHint(context.Background(), &protocol.InlayHintParams{
+				TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+				Range:        protocol.Range{End: protocol.Position{Line: 30}},
+			})
+			require.NoError(t, err)
+			type placed struct {
+				line, character uint32
+				label           string
+			}
+			var got []placed
+			for _, hint := range hints {
+				got = append(got, placed{hint.Position.Line, hint.Position.Character, strings.TrimLeft(fmt.Sprint(hint.Label), " ")})
+			}
+			after := func(line int, text string) uint32 {
+				return uint32(lsputil.UTF16Len(lines[line][:strings.Index(lines[line], text)+len(text)]))
+			}
+			assert.Equal(t, []placed{
+				{4, after(4, "17.98 USD"), "= 17.98 USD"},
+				{5, after(5, "20.00 EUR"), "= 20.00 EUR, 17.98 USD"},
+				{6, after(6, "equity:opening"), "-20.00 EUR, -17.98 USD = -20.00 EUR, -17.98 USD"},
+				{9, after(9, "10.00 USD"), ", 20.00 EUR"},
+				{10, after(10, "7.98 USD"), "= 7.98 USD"},
+				{13, after(13, "-1.00 USD"), "= 20.00 EUR, 9.00 USD"},
+				{14, after(14, "expenses:fees"), "1.00 USD = 1.00 USD"},
+				{18, after(18, "expenses:fees"), "= 1.00 USD"},
+			}, got)
 		})
 	}
 }
@@ -234,13 +301,13 @@ func TestInlayHint_RunningBalanceLeavesOutZeroCommodities(t *testing.T) {
 				byLine[hint.Position.Line] = hint.Label
 			}
 			assert.Equal(t, map[uint32]protocol.InlayHintLabel{
-				4:  protocol.String("balance: 100.00 USD"),
-				5:  protocol.String("balance: 50.00 EUR, 100.00 USD"),
-				6:  protocol.String("balance: -50.00 EUR, -100.00 USD"),
-				9:  protocol.String("balance: 50.00 EUR"),
-				10: protocol.String("balance: 100.00 USD"),
-				13: protocol.String("balance: 0.00 EUR"),
-				14: protocol.String("balance: 50.00 EUR, 100.00 USD"),
+				4:  protocol.String("= 100.00 USD"),
+				5:  protocol.String("= 50.00 EUR, 100.00 USD"),
+				6:  protocol.String("= -50.00 EUR, -100.00 USD"),
+				9:  protocol.String("= 50.00 EUR"),
+				10: protocol.String("= 100.00 USD"),
+				13: protocol.String("= 0.00 EUR"),
+				14: protocol.String("= 50.00 EUR, 100.00 USD"),
 			}, byLine)
 		})
 	}
@@ -259,13 +326,13 @@ func TestInlayHint_ZeroRunningBalanceOfAnElidedPosting(t *testing.T) {
 			"2024-01-04 ничего\n    " + cash + "  = 0 EUR\n    " + equity + "\n"
 	}
 	assigned := map[uint32]protocol.InlayHintLabel{
-		4:  protocol.String("balance: 1.00 USD"),
-		5:  protocol.String("balance: 2.00 EUR, 1.00 USD"),
-		6:  protocol.String("balance: -2.00 EUR, -1.00 USD"),
-		9:  protocol.String("balance: 2.00 EUR"),
-		10: protocol.String("balance: -2.00 EUR"),
-		13: protocol.String("balance: 0.00 EUR"),
-		14: protocol.String("balance: 0.00 EUR"),
+		4:  protocol.String("= 1.00 USD"),
+		5:  protocol.String("= 2.00 EUR, 1.00 USD"),
+		6:  protocol.String("= -2.00 EUR, -1.00 USD"),
+		9:  protocol.String("= 2.00 EUR"),
+		10: protocol.String("= -2.00 EUR"),
+		// Line 13 assigns its balance, which is all there is to say about it.
+		14: protocol.String("= 0.00 EUR"),
 	}
 	seed := "2024-01-01 сид\n    資産:現金  1 USD\n    資産:現金  2 EUR\n    капитал\n\n"
 	tests := []struct {
@@ -279,23 +346,23 @@ func TestInlayHint_ZeroRunningBalanceOfAnElidedPosting(t *testing.T) {
 			"2024-01-02 минус USD\n    капитал  1 USD\n    資産:現金\n\n" +
 			"2024-01-03 минус EUR\n    капитал  2 EUR\n    資産:現金\n",
 			map[uint32]protocol.InlayHintLabel{
-				1:  protocol.String("balance: 1 USD"),
-				2:  protocol.String("balance: 2 EUR, 1 USD"),
-				3:  protocol.String("balance: -2 EUR, -1 USD"),
-				6:  protocol.String("balance: -2 EUR"),
-				7:  protocol.String("balance: 2 EUR"),
-				10: protocol.String("balance: 0 EUR"),
-				11: protocol.String("balance: 0 EUR"),
+				1:  protocol.String("= 1 USD"),
+				2:  protocol.String("= 2 EUR, 1 USD"),
+				3:  protocol.String("= -2 EUR, -1 USD"),
+				6:  protocol.String("= -2 EUR"),
+				7:  protocol.String("= 2 EUR"),
+				10: protocol.String("= 0 EUR"),
+				11: protocol.String("= 0 EUR"),
 			}},
 		{"every commodity at once", seed +
 			"2024-01-02 минус всё\n    капитал  1 USD\n    капитал  2 EUR\n    資産:現金\n",
 			map[uint32]protocol.InlayHintLabel{
-				1: protocol.String("balance: 1 USD"),
-				2: protocol.String("balance: 2 EUR, 1 USD"),
-				3: protocol.String("balance: -2 EUR, -1 USD"),
-				6: protocol.String("balance: -2 EUR"),
-				7: protocol.String("balance: 0 EUR"),
-				8: protocol.String("balance: 0 EUR, 0 USD"),
+				1: protocol.String("= 1 USD"),
+				2: protocol.String("= 2 EUR, 1 USD"),
+				3: protocol.String("= -2 EUR, -1 USD"),
+				6: protocol.String("= -2 EUR"),
+				7: protocol.String("= 0 EUR"),
+				8: protocol.String("= 0 EUR, 0 USD"),
 			}},
 	}
 	for _, tt := range tests {
@@ -349,11 +416,11 @@ func TestInlayHint_ZeroRunningBalanceOfAStrictAssignment(t *testing.T) {
 				byLine[hint.Position.Line] = hint.Label
 			}
 			assert.Equal(t, map[uint32]protocol.InlayHintLabel{
-				4:  protocol.String("balance: 1.00 USD"),
-				5:  protocol.String("balance: 2.00 EUR, 1.00 USD"),
-				6:  protocol.String("balance: -2.00 EUR, -1.00 USD"),
-				9:  protocol.String("balance: 0.00 EUR, 0.00 USD"),
-				10: protocol.String("balance: 0.00 EUR, 0.00 USD"),
+				4:  protocol.String("= 1.00 USD"),
+				5:  protocol.String("= 2.00 EUR, 1.00 USD"),
+				6:  protocol.String("= -2.00 EUR, -1.00 USD"),
+				// Line 9 assigns its balance, and the account holds nothing else.
+				10: protocol.String("= 0.00 EUR, 0.00 USD"),
 			}, byLine)
 		})
 	}
@@ -405,4 +472,34 @@ func TestInlayHint_BalanceAssignmentShowsTheAmountItMoves(t *testing.T) {
 			assert.Nil(t, hints[0].PaddingLeft)
 		})
 	}
+}
+
+// With running balances on, the assignment's own balance is already written,
+// and the elided posting's inferred amount carries its balance.
+func TestInlayHint_BalanceAssignmentWithRunningBalances(t *testing.T) {
+	srv := NewServer()
+	settings := srv.getSettings()
+	settings.InlayHints.RunningBalances = true
+	srv.setSettings(settings)
+	docURI := uri.URI("file:///test.journal")
+	content := "commodity 1,000.00 USD\n\n" +
+		"2026-07-31 Zestimate\n    активы:дом  =517,300.00 USD\n    equity:gains\n\n" +
+		"2026-08-03 Zestimate\n    активы:дом  =522,000.00 USD\n    equity:gains\n"
+	srv.StoreDocument(docURI, content)
+
+	hints, err := srv.InlayHint(context.Background(), &protocol.InlayHintParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+		Range:        protocol.Range{End: protocol.Position{Line: 10}},
+	})
+	require.NoError(t, err)
+	var labels []string
+	for _, hint := range hints {
+		labels = append(labels, strings.TrimLeft(fmt.Sprint(hint.Label), " "))
+	}
+	assert.Equal(t, []string{
+		"517,300.00 USD",
+		"-517,300.00 USD = -517,300.00 USD",
+		"4,700.00 USD",
+		"-4,700.00 USD = -522,000.00 USD",
+	}, labels)
 }

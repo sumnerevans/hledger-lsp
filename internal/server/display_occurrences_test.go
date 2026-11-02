@@ -153,7 +153,7 @@ func TestInlayHint_RunningBalanceIsShownPerOccurrence(t *testing.T) {
 
 	hints := hintsAt(t, ts, docURI)
 	labels := inlayLabelsOf(hints)
-	assert.Equal(t, []string{"balance: 10 USD | 20 USD", "balance: -10 USD | -20 USD"}, labels)
+	assert.Equal(t, []string{"= 10 USD | 20 USD", "= -10 USD | -20 USD"}, labels)
 	tooltip := tooltipString(hints[0].Tooltip)
 	assert.Contains(t, tooltip, "first.journal:1")
 	assert.Contains(t, tooltip, "second.journal:1")
@@ -175,7 +175,7 @@ func TestInlayHint_RunningBalanceListsAtMostThreeOccurrences(t *testing.T) {
 
 	labels := inlayLabelsOf(hintsAt(t, ts, docURI))
 	require.NotEmpty(t, labels)
-	assert.Equal(t, "balance: 10 USD | 20 USD | 30 USD | …", labels[0])
+	assert.Equal(t, "= 10 USD | 20 USD | 30 USD | …", labels[0])
 }
 
 func TestInlayHint_RunningBalanceOfAFileIncludedOnceIsUnchanged(t *testing.T) {
@@ -186,7 +186,7 @@ func TestInlayHint_RunningBalanceOfAFileIncludedOnceIsUnchanged(t *testing.T) {
 	enableHints(ts, false, false, true)
 
 	hints := hintsAt(t, ts, docURI)
-	assert.Equal(t, []string{"balance: 10 USD", "balance: -10 USD"}, inlayLabelsOf(hints))
+	assert.Equal(t, []string{"= 10 USD", "= -10 USD"}, inlayLabelsOf(hints))
 	assert.Nil(t, hints[0].Tooltip)
 }
 
@@ -286,8 +286,7 @@ func TestInlayHint_InferredAmountAndBalanceOfALoneDocumentAreWrittenAlike(t *tes
 	enableHints(ts, true, false, true)
 
 	labels := inlayLabelsOf(hintsAt(t, ts, docURI))
-	assert.Contains(t, labels, "-12,345.000 Y")
-	assert.Contains(t, labels, "balance: -12,345.000 Y")
+	assert.Contains(t, labels, "-12,345.000 Y = -12,345.000 Y")
 }
 
 // A hint that joins the values of several occurrences is lined up by its first

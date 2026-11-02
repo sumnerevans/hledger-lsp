@@ -115,8 +115,8 @@ func TestInlayHint_ConcurrentRequestsDoNotLoseEdits(t *testing.T) {
 		wg.Wait()
 
 		want := []protocol.InlayHintLabel{
-			protocol.String(fmt.Sprintf("balance: %d USD", round+1000-(round+1))),
-			protocol.String(fmt.Sprintf("balance: %d USD", round+1)),
+			protocol.String(fmt.Sprintf("= %d USD", round+1000-(round+1))),
+			protocol.String(fmt.Sprintf("= %d USD", round+1)),
 		}
 		require.Equal(t, want, requestHintLabels(t, srv, aURI), "round %d", round)
 	}

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 	"sort"
@@ -56,6 +57,8 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 	hints := make([]protocol.InlayHint, 0)
 	emit := func(transaction *ast.Transaction, posting *ast.Posting, effectAt func(reading int) (analyzer.PostingEffect, bool), balanceAt, assignedAt, movedAt func(occurrence int) map[string]decimal.Decimal) {
 		offset := posting.Range.Start.Offset
+		// The inferred amount, when there is one, also carries the balance.
+		inferredHint := -1
 		if settings.InlayHints.InferredAmounts {
 			// A posting of a transaction with a balance assignment has the amount
 			// the replay gave it, since the transaction alone cannot tell it.
@@ -128,7 +131,10 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 				padding, aligned := inferredHintPadding(lines, posting, gap)
 				hint := valuedHint(mapper.LineEndPosition(int(accountEnd.Line)), strings.Repeat(" ", padding), values)
 				hint.PaddingLeft = boolPtr(!aligned)
-				hints = appendHintInRange(hints, params.Range, hint)
+				if positionInProtocolRange(hint.Position, params.Range) {
+					inferredHint = len(hints)
+					hints = append(hints, hint)
+				}
 			}
 		}
 		if settings.InlayHints.CostExpansion && posting.Cost != nil {
@@ -142,18 +148,44 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 				hints = appendHintInRange(hints, params.Range, valuedHint(mapper.ByteToLSP(posting.Cost.Range.End.Offset), "cost: ", values))
 			}
 		}
+		if !settings.InlayHints.RunningBalances {
+			// The replay may have run only for the amounts of balance assignments.
+			return
+		}
+		// The balance reads the way `hledger print -x` writes it, as an assertion
+		// after the amount. A posting that already asserts its balance shows only
+		// what the assertion leaves out.
+		assertion := posting.BalanceAssertion
+		if assertion != nil && assertion.IsInclusive {
+			// An inclusive assertion counts the subaccounts, which the running
+			// balance does not, so the two do not add up.
+			return
+		}
 		var values []hintValue
 		for index, occurrence := range occurrences {
-			if !settings.InlayHints.RunningBalances {
-				break
+			amounts := balanceAt(index)
+			if len(amounts) == 0 {
+				continue
 			}
-			if amounts := balanceAt(index); len(amounts) > 0 {
-				transacted := transactedCommodities(posting, movedAt(index))
-				values = addHintValue(values, formatAmounts(shownBalance(amounts, transacted), occurrence.formatsAt(offset)), []occurrenceRef{occurrence.ref})
+			if assertion != nil {
+				amounts = unassertedBalance(amounts, assertion.Amount.Commodity.Symbol)
+			} else {
+				amounts = shownBalance(amounts, transactedCommodities(posting, movedAt(index)))
+			}
+			if len(amounts) > 0 {
+				values = addHintValue(values, formatAmounts(amounts, occurrence.formatsAt(offset)), []occurrenceRef{occurrence.ref})
 			}
 		}
-		if len(values) > 0 {
-			hints = appendHintInRange(hints, params.Range, valuedHint(mapper.ByteToLSP(posting.Range.End.Offset), "balance: ", values))
+		switch {
+		case len(values) == 0:
+		case assertion != nil:
+			hint := valuedHint(mapper.ByteToLSP(trimSpaceBefore(content, assertion.Range.End.Offset)), ", ", values)
+			hint.PaddingLeft = nil
+			hints = appendHintInRange(hints, params.Range, hint)
+		case inferredHint >= 0:
+			joinHint(&hints[inferredHint], valuedHint(protocol.Position{}, "= ", values))
+		default:
+			hints = appendHintInRange(hints, params.Range, valuedHint(mapper.ByteToLSP(trimSpaceBefore(content, writtenAmountEnd(posting))), "= ", values))
 		}
 	}
 
@@ -297,6 +329,57 @@ func zeroAmounts(amounts map[string]decimal.Decimal, formats map[string]formatte
 		return "0"
 	}
 	return formatAmounts(amounts, formats)
+}
+
+// unassertedBalance returns the commodities of a balance an assertion of
+// commodity does not name, leaving out those the account holds none of.
+func unassertedBalance(amounts map[string]decimal.Decimal, commodity string) map[string]decimal.Decimal {
+	rest := make(map[string]decimal.Decimal, len(amounts))
+	for other, quantity := range amounts {
+		if other != commodity && !quantity.IsZero() {
+			rest[other] = quantity
+		}
+	}
+	return rest
+}
+
+// joinHint appends next's label and tooltip to hint's, separated by a space.
+func joinHint(hint *protocol.InlayHint, next protocol.InlayHint) {
+	hint.Label = protocol.String(fmt.Sprint(hint.Label) + " " + fmt.Sprint(next.Label))
+	switch {
+	case hint.Tooltip == nil:
+		hint.Tooltip = next.Tooltip
+	case next.Tooltip != nil:
+		hint.Tooltip = protocol.String(fmt.Sprint(hint.Tooltip) + "\n" + fmt.Sprint(next.Tooltip))
+	}
+}
+
+// writtenAmountEnd returns the byte offset where a posting's amount ends,
+// together with its lot price and cost: where `hledger print -x` writes the
+// balance assertion. A posting with no amount ends after its account.
+func writtenAmountEnd(posting *ast.Posting) int {
+	end := posting.Account.Range.End.Offset
+	if posting.Amount != nil {
+		end = max(end, posting.Amount.Range.End.Offset)
+	}
+	if posting.LotPrice != nil {
+		end = max(end, posting.LotPrice.Range.End.Offset)
+	}
+	if posting.Cost != nil {
+		end = max(end, posting.Cost.Range.End.Offset)
+	}
+	return end
+}
+
+// trimSpaceBefore moves offset back over the spaces and tabs before it. The
+// range of an amount followed by a comment runs up to the comment, and a hint
+// belongs against the amount.
+func trimSpaceBefore(content string, offset int) int {
+	offset = min(offset, len(content))
+	for offset > 0 && (content[offset-1] == ' ' || content[offset-1] == '\t') {
+		offset--
+	}
+	return offset
 }
 
 // locatedEffect is a posting effect with the posting it belongs to.

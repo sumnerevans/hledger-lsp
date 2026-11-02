@@ -73,14 +73,14 @@ func TestWorkspace_OpenFileKeepsUnsavedEditsAcrossRebuilds(t *testing.T) {
 	editedB := "2024-01-02 b\n    assets:cash  3 USD\n    equity:b\n"
 	_, err := f.ts.replaceAndWait(f.bURI, editedB)
 	require.NoError(t, err)
-	assert.Contains(t, f.balanceHints(t, f.bURI), "balance: -7 USD")
+	assert.Contains(t, f.balanceHints(t, f.bURI), "= -7 USD")
 
 	editedA := "2024-01-01 a\n    assets:cash  -20 USD\n    equity:a\n"
 	_, err = f.ts.replaceAndWait(f.aURI, editedA)
 	require.NoError(t, err)
 
-	assert.Contains(t, f.balanceHints(t, f.bURI), "balance: -17 USD", "b's unsaved edit must count after a is edited")
-	assert.NotContains(t, f.balanceHints(t, f.bURI), "balance: -15 USD", "b must not be read from disk")
+	assert.Contains(t, f.balanceHints(t, f.bURI), "= -17 USD", "b's unsaved edit must count after a is edited")
+	assert.NotContains(t, f.balanceHints(t, f.bURI), "= -15 USD", "b must not be read from disk")
 }
 
 // The same stale read made balance assertions wrong. Here a is the later
@@ -120,7 +120,7 @@ func TestWorkspace_ClosedFileRevertsToDisk(t *testing.T) {
 	require.NoError(t, err)
 
 	hints := f.balanceHints(t, f.aURI)
-	assert.Contains(t, hints, "balance: -20 USD")
+	assert.Contains(t, hints, "= -20 USD")
 	resolved := f.ts.workspace.GetResolved()
 	require.NotNil(t, resolved)
 	var total string
