@@ -105,9 +105,12 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 			}
 			if len(values) > 0 && posting.BalanceAssertion != nil {
 				// The amount an assignment moves is written where the amount would
-				// be, just before the assignment: `account  5 USD=100 USD`.
+				// be, just before the assignment, with the space `hledger print -x`
+				// leaves before its `=`: `account  5 USD = 100 USD`. Without it the
+				// `=` sits a column left of those on the other lines.
 				hint := valuedHint(mapper.ByteToLSP(posting.BalanceAssertion.Range.Start.Offset), "", values)
 				hint.PaddingLeft = nil
+				hint.PaddingRight = boolPtr(true)
 				hints = appendHintInRange(hints, params.Range, hint)
 			} else if len(values) > 0 {
 				// Anchored past the end of the line rather than after the account

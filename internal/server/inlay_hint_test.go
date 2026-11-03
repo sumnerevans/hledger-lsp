@@ -470,6 +470,10 @@ func TestInlayHint_BalanceAssignmentShowsTheAmountItMoves(t *testing.T) {
 				{8, uint32(len("    equity:gains")), "-4,700.00 USD"},
 			}, got)
 			assert.Nil(t, hints[0].PaddingLeft)
+			// `hledger print -x` writes `517,300.00 USD = 517,300.00 USD`: the
+			// assignment's `=` keeps a space before it, as on every other line.
+			require.NotNil(t, hints[0].PaddingRight)
+			assert.True(t, *hints[0].PaddingRight)
 		})
 	}
 }
