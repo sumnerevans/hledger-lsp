@@ -277,3 +277,81 @@ func TestInlayHint_ElidedAmountLinesUpWithTheAssignment(t *testing.T) {
 		}
 	}
 }
+
+// Balance hints line up the way the formatter lines up written balance
+// assertions: within a transaction, the balances whose `=` fall in one column on
+// screen line up on their decimal points, whether a balance is a hint or written,
+// and whether its `=` follows a written amount, an inferred one, or the amount an
+// assignment moves.
+func TestInlayHint_BalancesLineUpLikeFormattedAssertions(t *testing.T) {
+	lines := []string{
+		"commodity 1,000.00 USD",
+		"",
+		"2026-01-01 seed",
+		"    資産:daf:fidelity                3,570.28 USD",
+		"    капитал:взнос                   -3,570.28 USD",
+		"",
+		"2026-03-31 Q1 Statement",
+		"    資産:daf:fidelity                    = 3,597.34 USD",
+		"    капитал:нереализованное",
+		"",
+		"2026-08-11 Fee",
+		"    資産:daf:fidelity                  -61.56 USD",
+		"    expenses:fees",
+		"",
+		"2026-08-12 Checked",
+		"    資産:daf:fidelity                   -1.00 USD = 3,534.78 USD",
+		"    expenses:fees                        1.00 USD",
+		"",
+	}
+	for name, newline := range map[string]string{"lf": "\n", "crlf": "\r\n"} {
+		t.Run(name, func(t *testing.T) {
+			srv := NewServer()
+			settings := srv.getSettings()
+			settings.InlayHints.RunningBalances = true
+			srv.setSettings(settings)
+			hints := requestInlayHints(t, srv, strings.Join(lines, newline))
+
+			// Each line as drawn, with its hints in place.
+			drawn := make(map[int]string)
+			for index := range lines {
+				drawn[index] = lines[index]
+			}
+			for i := len(hints) - 1; i >= 0; i-- {
+				hint := hints[i]
+				line := drawn[int(hint.Position.Line)]
+				at := lsputil.UTF16OffsetToByteOffset(lines[hint.Position.Line], int(hint.Position.Character))
+				text := labelText(t, hint)
+				if hint.PaddingLeft != nil && *hint.PaddingLeft {
+					text = " " + text
+				}
+				if hint.PaddingRight != nil && *hint.PaddingRight {
+					text += " "
+				}
+				drawn[int(hint.Position.Line)] = line[:at] + text + line[at:]
+			}
+			// The display column of the decimal point of the balance after `=`.
+			balanceDecimal := func(line int) int {
+				text := drawn[line]
+				eq := strings.Index(text, "= ")
+				require.GreaterOrEqual(t, eq, 0, "%q", text)
+				dot := eq + strings.Index(text[eq:], ".")
+				return formatter.DisplayWidth(text[:dot])
+			}
+			equals := func(line int) int {
+				return formatter.DisplayWidth(drawn[line][:strings.Index(drawn[line], "= ")])
+			}
+			for _, pair := range [][2]int{{7, 8}, {11, 12}, {15, 16}} {
+				if equals(pair[0]) != equals(pair[1]) {
+					continue
+				}
+				assert.Equal(t, balanceDecimal(pair[0]), balanceDecimal(pair[1]),
+					"%q\n%q", drawn[pair[0]], drawn[pair[1]])
+			}
+			// Every pair here shares an `=` column.
+			assert.Equal(t, equals(7), equals(8), "%q\n%q", drawn[7], drawn[8])
+			assert.Equal(t, equals(11), equals(12), "%q\n%q", drawn[11], drawn[12])
+			assert.Equal(t, equals(15), equals(16), "%q\n%q", drawn[15], drawn[16])
+		})
+	}
+}

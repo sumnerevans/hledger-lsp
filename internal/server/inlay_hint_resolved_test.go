@@ -72,7 +72,7 @@ func TestInlayHint_RunningBalanceNotTakenFromSiblingInclude(t *testing.T) {
 			a:    "2024-01-01 продукты\n    расходы:食品  10 ₽\n    активы:現金  -10 ₽\n",
 			b:    "2024-02-01 аренда\n    расходы:жильё  100 ₽\n    активы:現金  -100 ₽\n",
 			expected: []protocol.InlayHintLabel{
-				protocol.String("= 10 ₽"), protocol.String("= -10 ₽"),
+				protocol.String("=  10 ₽"), protocol.String("= -10 ₽"),
 			},
 		},
 		{

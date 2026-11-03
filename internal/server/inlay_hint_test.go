@@ -361,7 +361,7 @@ func TestInlayHint_ZeroRunningBalanceOfAnElidedPosting(t *testing.T) {
 				2: protocol.String("= 2 EUR, 1 USD"),
 				3: protocol.String("= -2 EUR, -1 USD"),
 				6: protocol.String("= -2 EUR"),
-				7: protocol.String("= 0 EUR"),
+				7: protocol.String("=  0 EUR"), // lined up with the -2 EUR above
 				8: protocol.String("= 0 EUR, 0 USD"),
 			}},
 	}

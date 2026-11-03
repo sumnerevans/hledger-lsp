@@ -74,6 +74,9 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 		realign func(column int) (padding int, aligned bool)
 	}
 	var waiting []waitingHint
+	// The balances of each transaction, hinted or written, are lined up the way
+	// the formatter lines up written assertions once every hint is placed.
+	var balances []drawnBalance
 	// lineUpWaiting puts each transaction's elided amounts and assignment hint on
 	// one decimal column, and returns the hints. The column is the assignment's
 	// unless an elided amount cannot reach that far left, as a negative amount
@@ -101,12 +104,15 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 			hints[w.hint].Label = protocol.String(strings.Repeat(" ", padding) + label[w.padding:])
 			hints[w.hint].PaddingLeft = boolPtr(!aligned)
 		}
+		lineUpBalances(hints, balances, lines)
 		return hints
 	}
 	emit := func(transaction *ast.Transaction, posting *ast.Posting, effectAt func(reading int) (analyzer.PostingEffect, bool), balanceAt, assignedAt, movedAt func(occurrence int) map[string]decimal.Decimal) {
 		offset := posting.Range.Start.Offset
 		// The inferred amount, when there is one, also carries the balance.
 		inferredHint := -1
+		// The hint drawn before an assignment's `=`, which moves it right.
+		assignmentHint := -1
 		if settings.InlayHints.InferredAmounts {
 			// A posting of a transaction with a balance assignment has the amount
 			// the replay gave it, since the transaction alone cannot tell it.
@@ -164,6 +170,7 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 					index = len(hints)
 					hints = append(hints, hint)
 				}
+				assignmentHint = index
 				if column, ok := hintDecimalColumn(lines, posting.BalanceAssertion.Range.Start, values[0].text, labelDecimalMark(firstAmounts, firstFormats)); ok {
 					if _, seen := assignedHints[transaction.Range.Start.Offset]; !seen {
 						assignedHints[transaction.Range.Start.Offset] = assignedHint{index, column}
@@ -233,12 +240,24 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 		// after the amount. A posting that already asserts its balance shows only
 		// what the assertion leaves out.
 		assertion := posting.BalanceAssertion
+		if assertion != nil {
+			formats := readings[0].formatsAt(offset)
+			balances = append(balances, drawnBalance{
+				transaction: transaction.Range.Start.Offset,
+				hint:        -1,
+				written:     assertion,
+				shiftedBy:   assignmentHint,
+				mark:        labelDecimalMark(map[string]decimal.Decimal{assertion.Amount.Commodity.Symbol: decimal.Zero}, formats),
+			})
+		}
 		if assertion != nil && assertion.IsInclusive {
 			// An inclusive assertion counts the subaccounts, which the running
 			// balance does not, so the two do not add up.
 			return
 		}
 		var values []hintValue
+		// The first value is the one lined up, as for an inferred amount.
+		mark := '.'
 		for index, occurrence := range occurrences {
 			amounts := balanceAt(index)
 			if len(amounts) == 0 {
@@ -250,8 +269,21 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 				amounts = shownBalance(amounts, transactedCommodities(posting, movedAt(index)))
 			}
 			if len(amounts) > 0 {
+				if len(values) == 0 {
+					mark = labelDecimalMark(amounts, occurrence.formatsAt(offset))
+				}
 				values = addHintValue(values, formatAmounts(amounts, occurrence.formatsAt(offset)), []occurrenceRef{occurrence.ref})
 			}
+		}
+		// balanceHint keeps a balance hint for lining up, its balance being the
+		// last len(label) bytes of the hint's label.
+		balanceHint := func(index int, label protocol.InlayHint) {
+			balances = append(balances, drawnBalance{
+				transaction: transaction.Range.Start.Offset,
+				hint:        index,
+				balance:     len(strings.TrimPrefix(fmt.Sprint(label.Label), "= ")),
+				mark:        mark,
+			})
 		}
 		switch {
 		case len(values) == 0:
@@ -260,9 +292,15 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 			hint.PaddingLeft = nil
 			hints = appendHintInRange(hints, params.Range, hint)
 		case inferredHint >= 0:
-			joinHint(&hints[inferredHint], valuedHint(protocol.Position{}, "= ", values))
+			balance := valuedHint(protocol.Position{}, "= ", values)
+			joinHint(&hints[inferredHint], balance)
+			balanceHint(inferredHint, balance)
 		default:
-			hints = appendHintInRange(hints, params.Range, valuedHint(mapper.ByteToLSP(trimSpaceBefore(content, writtenAmountEnd(posting))), "= ", values))
+			hint := valuedHint(mapper.ByteToLSP(trimSpaceBefore(content, writtenAmountEnd(posting))), "= ", values)
+			if positionInProtocolRange(hint.Position, params.Range) {
+				balanceHint(len(hints), hint)
+				hints = append(hints, hint)
+			}
 		}
 	}
 
@@ -638,6 +676,110 @@ func journalTransactions(journal *ast.Journal) []include.SourcedTransaction {
 		sourced[i] = include.SourcedTransaction{Index: i, Transaction: journal.Transactions[i]}
 	}
 	return sourced
+}
+
+// drawnBalance is a balance after an `=` as it is drawn: one a hint shows, or a
+// written assertion, which the hints before it on its line can move right.
+type drawnBalance struct {
+	// transaction is the offset its transaction starts at.
+	transaction int
+	// hint is the index of the hint that shows the balance, which ends its
+	// label in balance bytes; -1 for a written assertion.
+	hint, balance int
+	written       *ast.BalanceAssertion
+	// shiftedBy is the index of the hint drawn before a written assertion's
+	// `=`, or -1.
+	shiftedBy int
+	mark      rune
+}
+
+// lineUpBalances lines up the balances of each transaction the way the
+// formatter lines up written balance assertions: those whose `=` are drawn in
+// one column line up on their decimal points, padded after the `=`. Only a hint
+// can be padded, so a written balance short of the column stays where it is.
+func lineUpBalances(hints []protocol.InlayHint, balances []drawnBalance, lines []string) {
+	type key struct{ transaction, equals int }
+	type placed struct {
+		hint, at, decimal int
+	}
+	groups := make(map[key][]placed)
+	for _, b := range balances {
+		if b.hint < 0 {
+			equals, ok := textColumn(lines, b.written.Range.Start)
+			if !ok {
+				continue
+			}
+			start, ok := textColumn(lines, b.written.Amount.Range.Start)
+			if !ok {
+				continue
+			}
+			lineIndex := b.written.Amount.Range.Start.Line - 1
+			line := strings.TrimSuffix(lines[lineIndex], "\r")
+			from := lsputil.UTF16OffsetToByteOffset(line, lsputil.RuneOffsetToUTF16Offset(line, b.written.Amount.Range.Start.Column-1))
+			shift := 0
+			if b.shiftedBy >= 0 {
+				shift = formatter.DisplayWidth(fmt.Sprint(hints[b.shiftedBy].Label)) + 1
+			}
+			k := key{b.transaction, equals + shift}
+			groups[k] = append(groups[k], placed{-1, 0, start + shift + amountIntegerWidth(line[from:], b.mark)})
+			continue
+		}
+		hint := hints[b.hint]
+		start, ok := hintColumn(lines, hint)
+		if !ok {
+			continue
+		}
+		label := fmt.Sprint(hint.Label)
+		at := len(label) - b.balance
+		// The `=` and the space after it come just before the balance.
+		equals := start + formatter.DisplayWidth(label[:at]) - 2
+		k := key{b.transaction, equals}
+		groups[k] = append(groups[k], placed{b.hint, at, equals + 2 + amountIntegerWidth(label[at:], b.mark)})
+	}
+	for _, group := range groups {
+		column := 0
+		for _, p := range group {
+			column = max(column, p.decimal)
+		}
+		for _, p := range group {
+			if p.hint >= 0 && column > p.decimal {
+				label := fmt.Sprint(hints[p.hint].Label)
+				hints[p.hint].Label = protocol.String(label[:p.at] + strings.Repeat(" ", column-p.decimal) + label[p.at:])
+			}
+		}
+	}
+}
+
+// textColumn returns the display column of a position in the document.
+func textColumn(lines []string, position ast.Position) (int, bool) {
+	lineIndex := position.Line - 1
+	if lineIndex < 0 || lineIndex >= len(lines) {
+		return 0, false
+	}
+	line := strings.TrimSuffix(lines[lineIndex], "\r")
+	at := lsputil.UTF16OffsetToByteOffset(line, lsputil.RuneOffsetToUTF16Offset(line, position.Column-1))
+	if at < 0 || at > len(line) {
+		return 0, false
+	}
+	return formatter.DisplayWidthInLine(line, at, formatter.DefaultTabSize), true
+}
+
+// hintColumn returns the display column a hint's label starts at, past the
+// space the client draws before it.
+func hintColumn(lines []string, hint protocol.InlayHint) (int, bool) {
+	if int(hint.Position.Line) >= len(lines) {
+		return 0, false
+	}
+	line := strings.TrimSuffix(lines[hint.Position.Line], "\r")
+	at := lsputil.UTF16OffsetToByteOffset(line, int(hint.Position.Character))
+	if at < 0 || at > len(line) {
+		return 0, false
+	}
+	column := formatter.DisplayWidthInLine(line, at, formatter.DefaultTabSize)
+	if hint.PaddingLeft != nil && *hint.PaddingLeft {
+		column++
+	}
+	return column, true
 }
 
 // hasAssignment reports whether a posting of transaction assigns its balance.
