@@ -416,9 +416,9 @@ func TestInlayHint_ZeroRunningBalanceOfAStrictAssignment(t *testing.T) {
 				byLine[hint.Position.Line] = hint.Label
 			}
 			assert.Equal(t, map[uint32]protocol.InlayHintLabel{
-				4:  protocol.String("= 1.00 USD"),
-				5:  protocol.String("= 2.00 EUR, 1.00 USD"),
-				6:  protocol.String("= -2.00 EUR, -1.00 USD"),
+				4: protocol.String("= 1.00 USD"),
+				5: protocol.String("= 2.00 EUR, 1.00 USD"),
+				6: protocol.String("= -2.00 EUR, -1.00 USD"),
 				// Line 9 assigns its balance, and the account holds nothing else.
 				10: protocol.String("= 0.00 EUR, 0.00 USD"),
 			}, byLine)

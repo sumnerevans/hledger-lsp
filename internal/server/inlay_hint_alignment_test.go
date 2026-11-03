@@ -11,6 +11,7 @@ import (
 	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/formatter"
+	"github.com/juev/hledger-lsp/internal/lsputil"
 	"github.com/juev/hledger-lsp/internal/parser"
 )
 
@@ -219,4 +220,53 @@ func TestInlayHint_AlignmentOptionSelectsTheColumn(t *testing.T) {
 	settings.InlayHints.InferredAmountAlignment = inferredAlignFormatter
 	srv.setSettings(settings)
 	assert.Greater(t, len(labelText(t, requestInlayHints(t, srv, content)[0])), len(transaction))
+}
+
+// A transaction whose only amounts are hints, the amount an assignment moves and
+// the elided amount that balances it, has no written amount to line up with. The
+// elided amount lines up with the assignment's hint instead, whichever of the
+// two postings is written first, and whatever column the formatter would pick.
+func TestInlayHint_ElidedAmountLinesUpWithTheAssignment(t *testing.T) {
+	assignment := "    資産:fidelity                   = 3,597.34 USD"
+	elided := "    капитал:нереализованное"
+	for order, postings := range map[string][2]string{
+		"assignment first": {assignment, elided},
+		"elided first":     {elided, assignment},
+	} {
+		for name, newline := range map[string]string{"lf": "\n", "crlf": "\r\n"} {
+			t.Run(order+"/"+name, func(t *testing.T) {
+				lines := []string{
+					"commodity 1,000.00 USD",
+					"",
+					"2026-01-01 seed",
+					"    資産:fidelity  3,570.28 USD",
+					"    капитал:взнос  -3,570.28 USD",
+					"",
+					"2026-03-31 Q1 Statement",
+					postings[0],
+					postings[1],
+					"",
+				}
+				hints := requestInlayHints(t, NewServer(), strings.Join(lines, newline))
+
+				// The display column of the decimal mark of each hint on lines 7 and 8.
+				decimals := make(map[uint32]int)
+				for _, hint := range hints {
+					if hint.Position.Line != 7 && hint.Position.Line != 8 {
+						continue
+					}
+					line := lines[hint.Position.Line]
+					before := line[:lsputil.UTF16OffsetToByteOffset(line, int(hint.Position.Character))]
+					label := labelText(t, hint)
+					start := formatter.DisplayWidth(before)
+					if hint.PaddingLeft != nil && *hint.PaddingLeft {
+						start++
+					}
+					decimals[hint.Position.Line] = start + strings.Index(label, ".")
+				}
+				require.Len(t, decimals, 2, "%v", inlayLabelsOf(hints))
+				assert.Equal(t, decimals[7], decimals[8])
+			})
+		}
+	}
 }

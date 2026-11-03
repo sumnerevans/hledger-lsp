@@ -55,6 +55,31 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 	lines := splitLines(content)
 	alignment := s.lazyDocumentAlignment(params.TextDocument.URI, readings[0].journal, content, settings.Formatting)
 	hints := make([]protocol.InlayHint, 0)
+	// A transaction whose only amounts are hints has nothing written for an
+	// elided amount to line up with but the amount its assignment moves. That
+	// hint's decimal column is kept by the offset its transaction starts at, and
+	// an elided amount written above its assignment waits for it.
+	assignedColumns := make(map[int]int)
+	type waitingHint struct {
+		hint, padding, transaction int
+		realign                    func(column int) (padding int, aligned bool)
+	}
+	var waiting []waitingHint
+	// lineUpWaiting moves the elided amounts that waited for an assignment below
+	// them to its column, and returns the hints.
+	lineUpWaiting := func() []protocol.InlayHint {
+		for _, w := range waiting {
+			column, ok := assignedColumns[w.transaction]
+			if !ok {
+				continue
+			}
+			padding, aligned := w.realign(column)
+			label := fmt.Sprint(hints[w.hint].Label)
+			hints[w.hint].Label = protocol.String(strings.Repeat(" ", padding) + label[w.padding:])
+			hints[w.hint].PaddingLeft = boolPtr(!aligned)
+		}
+		return hints
+	}
 	emit := func(transaction *ast.Transaction, posting *ast.Posting, effectAt func(reading int) (analyzer.PostingEffect, bool), balanceAt, assignedAt, movedAt func(occurrence int) map[string]decimal.Decimal) {
 		offset := posting.Range.Start.Offset
 		// The inferred amount, when there is one, also carries the balance.
@@ -112,6 +137,11 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 				hint.PaddingLeft = nil
 				hint.PaddingRight = boolPtr(true)
 				hints = appendHintInRange(hints, params.Range, hint)
+				if column, ok := hintDecimalColumn(lines, posting.BalanceAssertion.Range.Start, values[0].text, labelDecimalMark(firstAmounts, firstFormats)); ok {
+					if _, seen := assignedColumns[transaction.Range.Start.Offset]; !seen {
+						assignedColumns[transaction.Range.Start.Offset] = column
+					}
+				}
 			} else if len(values) > 0 {
 				// Anchored past the end of the line rather than after the account
 				// name: an inlay hint takes up room in the rendered line, so a hint
@@ -122,21 +152,34 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 				// assertion, which this is not.
 				accountEnd := mapper.ByteToLSP(posting.Account.Range.End.Offset)
 				label := values[0].text
-				gap := func(writtenEnd int) int {
-					if settings.InlayHints.InferredAmountAlignment == inferredAlignTransaction {
-						if column, ok := transactionDecimalColumn(lines, transaction); ok {
+				gapTo := func(column int, known bool) func(writtenEnd int) int {
+					return func(writtenEnd int) int {
+						if known {
 							prefix := amountIntegerWidth(label, labelDecimalMark(firstAmounts, firstFormats))
 							return max(column-prefix-writtenEnd, minHintGap)
 						}
+						return amountSpacesFromAlignment(writtenEnd, label, alignment(), settings.Formatting)
 					}
-					return amountSpacesFromAlignment(writtenEnd, label, alignment(), settings.Formatting)
 				}
-				padding, aligned := inferredHintPadding(lines, posting, gap)
+				byTransaction := settings.InlayHints.InferredAmountAlignment == inferredAlignTransaction
+				column, known := 0, false
+				if byTransaction {
+					column, known = transactionDecimalColumn(lines, transaction)
+					if !known {
+						column, known = assignedColumns[transaction.Range.Start.Offset]
+					}
+				}
+				padding, aligned := inferredHintPadding(lines, posting, gapTo(column, known))
 				hint := valuedHint(mapper.LineEndPosition(int(accountEnd.Line)), strings.Repeat(" ", padding), values)
 				hint.PaddingLeft = boolPtr(!aligned)
 				if positionInProtocolRange(hint.Position, params.Range) {
 					inferredHint = len(hints)
 					hints = append(hints, hint)
+					if byTransaction && !known && hasAssignment(transaction) {
+						waiting = append(waiting, waitingHint{inferredHint, padding, transaction.Range.Start.Offset, func(column int) (int, bool) {
+							return inferredHintPadding(lines, posting, gapTo(column, true))
+						}})
+					}
 				}
 			}
 		}
@@ -208,7 +251,7 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 				func(occurrence int) map[string]decimal.Decimal { return occurrences[occurrence].replay.Assigned[ref] },
 				func(occurrence int) map[string]decimal.Decimal { return occurrences[occurrence].replay.Moved[ref] })
 		}
-		return hints, nil
+		return lineUpWaiting(), nil
 	}
 
 	// Several readings parse the same text, but a context can drop or keep a
@@ -251,7 +294,7 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 			func(occurrence int) map[string]decimal.Decimal { return replaysByOffset[occurrence].assigned[offset] },
 			func(occurrence int) map[string]decimal.Decimal { return replaysByOffset[occurrence].moved[offset] })
 	}
-	return hints, nil
+	return lineUpWaiting(), nil
 }
 
 // shownBalance leaves out the commodities a running balance holds none of. A
@@ -564,6 +607,32 @@ func journalTransactions(journal *ast.Journal) []include.SourcedTransaction {
 		sourced[i] = include.SourcedTransaction{Index: i, Transaction: journal.Transactions[i]}
 	}
 	return sourced
+}
+
+// hasAssignment reports whether a posting of transaction assigns its balance.
+func hasAssignment(transaction *ast.Transaction) bool {
+	for i := range transaction.Postings {
+		if transaction.Postings[i].Amount == nil && transaction.Postings[i].BalanceAssertion != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// hintDecimalColumn returns the display column of the decimal mark of label
+// drawn at position: where an assignment's hint puts the decimal point of the
+// amount it moves.
+func hintDecimalColumn(lines []string, position ast.Position, label string, mark rune) (int, bool) {
+	lineIndex := position.Line - 1
+	if lineIndex < 0 || lineIndex >= len(lines) {
+		return 0, false
+	}
+	line := strings.TrimSuffix(lines[lineIndex], "\r")
+	start := lsputil.UTF16OffsetToByteOffset(line, lsputil.RuneOffsetToUTF16Offset(line, position.Column-1))
+	if start < 0 || start > len(line) {
+		return 0, false
+	}
+	return formatter.DisplayWidthInLine(line, start, formatter.DefaultTabSize) + amountIntegerWidth(label, mark), true
 }
 
 // minHintGap is the separation hledger requires between account and amount.
