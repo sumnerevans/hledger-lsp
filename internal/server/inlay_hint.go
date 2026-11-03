@@ -56,20 +56,43 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 	alignment := s.lazyDocumentAlignment(params.TextDocument.URI, readings[0].journal, content, settings.Formatting)
 	hints := make([]protocol.InlayHint, 0)
 	// A transaction whose only amounts are hints has nothing written for an
-	// elided amount to line up with but the amount its assignment moves. That
-	// hint's decimal column is kept by the offset its transaction starts at, and
-	// an elided amount written above its assignment waits for it.
-	assignedColumns := make(map[int]int)
+	// elided amount to line up with but the amount its assignment moves. Neither
+	// is placed until both are known: the assignment's hint, kept by the offset
+	// its transaction starts at, and the elided amounts waiting for it.
+	type assignedHint struct {
+		// hint is the index of the assignment's hint, or -1 outside the range.
+		hint int
+		// column is the display column of its decimal mark, left unpadded.
+		column int
+	}
+	assignedHints := make(map[int]assignedHint)
 	type waitingHint struct {
 		hint, padding, transaction int
-		realign                    func(column int) (padding int, aligned bool)
+		// least is the leftmost decimal column the amount can take while keeping
+		// its gap after the account, or -1 when the line cannot be lined up.
+		least   int
+		realign func(column int) (padding int, aligned bool)
 	}
 	var waiting []waitingHint
-	// lineUpWaiting moves the elided amounts that waited for an assignment below
-	// them to its column, and returns the hints.
+	// lineUpWaiting puts each transaction's elided amounts and assignment hint on
+	// one decimal column, and returns the hints. The column is the assignment's
+	// unless an elided amount cannot reach that far left, as a negative amount
+	// after a longer account cannot, and then the assignment's hint moves right.
 	lineUpWaiting := func() []protocol.InlayHint {
+		columns := make(map[int]int)
 		for _, w := range waiting {
-			column, ok := assignedColumns[w.transaction]
+			if assigned, ok := assignedHints[w.transaction]; ok {
+				columns[w.transaction] = max(columns[w.transaction], assigned.column, w.least)
+			}
+		}
+		for transaction, column := range columns {
+			if assigned := assignedHints[transaction]; assigned.hint >= 0 && column > assigned.column {
+				hint := &hints[assigned.hint]
+				hint.Label = protocol.String(strings.Repeat(" ", column-assigned.column) + fmt.Sprint(hint.Label))
+			}
+		}
+		for _, w := range waiting {
+			column, ok := columns[w.transaction]
 			if !ok {
 				continue
 			}
@@ -136,10 +159,14 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 				hint := valuedHint(mapper.ByteToLSP(posting.BalanceAssertion.Range.Start.Offset), "", values)
 				hint.PaddingLeft = nil
 				hint.PaddingRight = boolPtr(true)
-				hints = appendHintInRange(hints, params.Range, hint)
+				index := -1
+				if positionInProtocolRange(hint.Position, params.Range) {
+					index = len(hints)
+					hints = append(hints, hint)
+				}
 				if column, ok := hintDecimalColumn(lines, posting.BalanceAssertion.Range.Start, values[0].text, labelDecimalMark(firstAmounts, firstFormats)); ok {
-					if _, seen := assignedColumns[transaction.Range.Start.Offset]; !seen {
-						assignedColumns[transaction.Range.Start.Offset] = column
+					if _, seen := assignedHints[transaction.Range.Start.Offset]; !seen {
+						assignedHints[transaction.Range.Start.Offset] = assignedHint{index, column}
 					}
 				}
 			} else if len(values) > 0 {
@@ -165,9 +192,6 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 				column, known := 0, false
 				if byTransaction {
 					column, known = transactionDecimalColumn(lines, transaction)
-					if !known {
-						column, known = assignedColumns[transaction.Range.Start.Offset]
-					}
 				}
 				padding, aligned := inferredHintPadding(lines, posting, gapTo(column, known))
 				hint := valuedHint(mapper.LineEndPosition(int(accountEnd.Line)), strings.Repeat(" ", padding), values)
@@ -176,7 +200,14 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 					inferredHint = len(hints)
 					hints = append(hints, hint)
 					if byTransaction && !known && hasAssignment(transaction) {
-						waiting = append(waiting, waitingHint{inferredHint, padding, transaction.Range.Start.Offset, func(column int) (int, bool) {
+						least := -1
+						if _, ok := inferredHintPadding(lines, posting, func(writtenEnd int) int {
+							least = writtenEnd + minHintGap + amountIntegerWidth(label, labelDecimalMark(firstAmounts, firstFormats))
+							return minHintGap
+						}); !ok {
+							least = -1
+						}
+						waiting = append(waiting, waitingHint{inferredHint, padding, transaction.Range.Start.Offset, least, func(column int) (int, bool) {
 							return inferredHintPadding(lines, posting, gapTo(column, true))
 						}})
 					}

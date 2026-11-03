@@ -229,9 +229,16 @@ func TestInlayHint_AlignmentOptionSelectsTheColumn(t *testing.T) {
 func TestInlayHint_ElidedAmountLinesUpWithTheAssignment(t *testing.T) {
 	assignment := "    資産:fidelity                   = 3,597.34 USD"
 	elided := "    капитал:нереализованное"
+	// An elided account longer than the assignment's leaves the negative amount no
+	// room to the left, so the assignment's hint moves right to meet it, and the
+	// sign spills into the gap after the account.
+	tight := "    資産:fidelity  = 3,597.34 USD"
+	longElided := "    капитал:нереализованное:долгосрочное"
 	for order, postings := range map[string][2]string{
-		"assignment first": {assignment, elided},
-		"elided first":     {elided, assignment},
+		"assignment first":             {assignment, elided},
+		"elided first":                 {elided, assignment},
+		"long elided account":          {tight, longElided},
+		"long elided account above it": {longElided, tight},
 	} {
 		for name, newline := range map[string]string{"lf": "\n", "crlf": "\r\n"} {
 			t.Run(order+"/"+name, func(t *testing.T) {
@@ -265,7 +272,7 @@ func TestInlayHint_ElidedAmountLinesUpWithTheAssignment(t *testing.T) {
 					decimals[hint.Position.Line] = start + strings.Index(label, ".")
 				}
 				require.Len(t, decimals, 2, "%v", inlayLabelsOf(hints))
-				assert.Equal(t, decimals[7], decimals[8])
+				assert.Equal(t, decimals[7], decimals[8], "%q", inlayLabelsOf(hints))
 			})
 		}
 	}
